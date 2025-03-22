@@ -4,6 +4,9 @@ from diffusers import (
     StableVideoDiffusionPipeline
 )
 import imageio
+import numpy as np
+from PIL import Image
+import os
 
 # Models
 img_model_id = "runwayml/stable-diffusion-v1-5"
@@ -40,25 +43,38 @@ def generate_video_from_image(image, output_video_path, num_frames=25, fps=7):
         decode_chunk_size=8
     ).frames
 
-    # Debug: Print the shape of the frames
+    quantized_frames = []
     for i, frame in enumerate(frames):
+        frame = np.array(frame)  # Convert frame to a NumPy array
+        frame = np.squeeze(frame)  # Remove single-dimensional entries
         print(f"Frame {i} shape: {frame.shape}")
 
-    # Ensure frames have the correct number of channels
-    frames = [frame if frame.shape[2] in [1, 2, 3, 4] else frame[:, :, :3] for frame in frames]
+        # Ensure the frame has the correct shape (height, width, channels)
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            pil_frame = Image.fromarray(frame)
+        else:
+            raise ValueError(f"Unexpected frame shape: {frame.shape}")
 
-    imageio.mimsave(output_video_path, frames, fps=fps)
+        # Quantize the frame to reduce the number of unique colors
+        quantized_frame = pil_frame.quantize(colors=256)
+        quantized_frames.append(np.array(quantized_frame.convert("RGB")))
+
+    imageio.mimsave(output_video_path, quantized_frames, fps=fps)
     print(f"✅ Video saved at {output_video_path}")
 
 # Full pipeline: text prompt → image → video
 def full_pipeline(prompt, image_path, video_path):
-    generated_image = generate_image(prompt, image_path)
+    if os.path.exists(image_path):
+        print(f"ℹ️ Image already exists at {image_path}, skipping image generation.")
+        generated_image = Image.open(image_path)
+    else:
+        generated_image = generate_image(prompt, image_path)
     generate_video_from_image(generated_image, video_path)
 
 # Run the pipeline
-if __name__ == "__main__":
-    text_prompt = "An astronaut meditating on a serene, colorful alien planet"
-    output_image_path = "generated_image.png"
-    output_video_path = "generated_video.mp4"
 
-    full_pipeline(text_prompt, output_image_path, output_video_path)
+text_prompt = "An astronaut meditating on a serene, colorful alien planet"
+output_image_path = "generated_image.png"
+output_video_path = "generated_video.mp4"
+
+full_pipeline(text_prompt, output_image_path, output_video_path)

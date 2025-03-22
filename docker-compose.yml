@@ -1,0 +1,26 @@
+version: "3.8"
+
+services:
+  llm:
+    build: ./llm_service
+    ports:
+      - "8001:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    runtime: nvidia
+
+  session:
+    build: ./session_service
+    ports:
+      - "8002:8000"
+
+  gateway:
+    build: ./gateway_service
+    ports:
+      - "8000:8000"
+    depends_on:
+      - llm
+      - session
