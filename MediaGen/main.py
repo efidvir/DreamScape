@@ -6,6 +6,7 @@ import uuid
 import os
 import shutil
 import asyncio
+from media_generation import generate_audio, generate_visual
 
 app = FastAPI()
 
@@ -20,22 +21,19 @@ class GenerationRequest(BaseModel):
 # Store tasks
 TASKS_STATUS = {}
 
-# Simulated media generation function
+# Real media generation function
 async def generate_media(task_id: str, instruction: str):
     try:
         TASKS_STATUS[task_id] = "started"
-        # Simulate audio generation
-        await asyncio.sleep(2)  # Simulate processing
+        
+        # Real audio generation
         audio_path = os.path.join(OUTPUT_DIR, f"{task_id}_audio.mp3")
-        with open(audio_path, "wb") as f:
-            f.write(b"FAKE_AUDIO_DATA")
+        await generate_audio(instruction, audio_path)
         TASKS_STATUS[task_id] = "audio_generated"
 
-        # Simulate visual generation
-        await asyncio.sleep(3)  # Simulate processing
+        # Real visual generation
         visual_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
-        with open(visual_path, "wb") as f:
-            f.write(b"FAKE_VISUAL_DATA")
+        await generate_visual(instruction, visual_path)
         TASKS_STATUS[task_id] = "completed"
 
     except Exception as e:
