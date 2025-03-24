@@ -1,26 +1,22 @@
-version: "3.8"
+version: '3.8'
 
 services:
-  llm:
-    build: ./llm_service
+  frontend:
+    build: ./frontend_flask
     ports:
-      - "8001:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: [gpu]
-    runtime: nvidia
+      - "5000:5000"
 
-  session:
-    build: ./session_service
-    ports:
-      - "8002:8000"
-
-  gateway:
-    build: ./gateway_service
+  ai-logic:
+    build: ./ai_logic
     ports:
       - "8000:8000"
-    depends_on:
-      - llm
-      - session
+
+  media-generator:
+    build: ./media_generator
+    ports:
+      - "8001:8001"
+
+  game-db:
+    build: ./game_db
+    ports:
+      - "8002:8002"
