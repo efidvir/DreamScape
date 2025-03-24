@@ -24,3 +24,5 @@ google-cloud-texttospeech
 google-auth
 google-auth-oauthlib
 google-api-core
+
+cryptography

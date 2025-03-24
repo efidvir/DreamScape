@@ -13,7 +13,7 @@ RUN pip install -r requirements.txt
 
 # Pre-download models at build time
 RUN python -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('stabilityai/sd-turbo', torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32).to('cpu')"
-RUN python -c "import torch; torch.hub.load(repo_or_dir='snakers4/silero-models', model='silero_tts', language='en', speaker='v3_en', trust_repo=True).to('cpu')"
+RUN python -c "import torch; model, utils = torch.hub.load('snakers4/silero-models', 'silero_tts', language='en', speaker='v3_en', trust_repo=True); model.apply_tts(text='test', speaker='en_0')"
 
 COPY . .
 
