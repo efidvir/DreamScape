@@ -1,0 +1,14 @@
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore environment variables and credentials
+.env
+
+# Ignore folders
+Instant-NGP-for-RTX-3000-and-4000/
+ignore and delete/
+myenv/
+
+# Files
+dreamscape-454613-b21d1604174d.json
