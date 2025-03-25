@@ -1,254 +1,216 @@
 /* ------------------------------
    Base swirl background (unchanged)
 ------------------------------ */
-
 html, body {
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    overflow: hidden;
-    background-color: #000;
-    color: #fff;
-    font-family: sans-serif;
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background-color: #000;
+  color: #fff;
+  font-family: sans-serif;
+}
+
+.pattern {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.container {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  background-image: radial-gradient(
+    circle at 50% 50%,
+    #0000 0,
+    #0000 2px,
+    hsl(0 0 4%) 2px
+  );
+  background-size: 8px 8px;
+  z-index: 0;
+}
+
+.container::before {
+  content: "";
+  position: absolute;
+  inset: -8em;
+  z-index: -1;
+  --f: blur(7em) brightness(5);
+  animation: blobs-1e28bd3d 150s linear infinite, thingy 5s linear infinite;
+  background-color: #000;
+  background-image:
+    radial-gradient(ellipse 66px 50px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 77px 60px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 78px 100px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 73px 96px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 76px 77px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 66px 51px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 90px 57px at 50% 50%, #0f0 0%, transparent 100%),
+    radial-gradient(ellipse 89px 93px at 50% 50%, #0f0 0%, transparent 100%);
+  background-size:
+    726px 576px,
+    1242px 454px,
+    876px 1160px,
+    691px 873px,
+    914px 550px,
+    1159px 340px,
+    1017px 831px,
+    313px 977px;
+}
+
+.container::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  backdrop-filter: hue-rotate(90deg);
+  mask: linear-gradient(45deg, #0000, #000);
+  animation: rotaty 5s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes thingy {
+  0% {
+    filter: var(--f) hue-rotate(0deg);
   }
-  
-  .pattern {
-    position: relative;
-    width: 100%;
-    height: 100%;
+  100% {
+    filter: var(--f) hue-rotate(1turn);
   }
-  
-  .container {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-    background-image: radial-gradient(
-      circle at 50% 50%,
-      #0000 0,
-      #0000 2px,
-      hsl(0 0 4%) 2px
-    );
-    background-size: 8px 8px;
-    z-index: 0;
+}
+
+@keyframes blobs-1e28bd3d {
+  0% {
+    background-position:
+      271px 478px,
+      62px 291px,
+      67px 861px,
+      553px 413px,
+      36px 392px,
+      1077px 226px,
+      400px 799px,
+      7px 264px;
   }
-  
-  .container::before {
-    content: "";
-    position: absolute;
-    inset: -8em;
-    z-index: -1;
-    --f: blur(7em) brightness(5);
-    animation: blobs-1e28bd3d 150s linear infinite, thingy 5s linear infinite;
-    background-color: #000;
-    background-image:
-      radial-gradient(ellipse 66px 50px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 77px 60px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 78px 100px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 73px 96px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 76px 77px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 66px 51px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 90px 57px at 50% 50%, #0f0 0%, transparent 100%),
-      radial-gradient(ellipse 89px 93px at 50% 50%, #0f0 0%, transparent 100%);
-    background-size:
-      726px 576px,
-      1242px 454px,
-      876px 1160px,
-      691px 873px,
-      914px 550px,
-      1159px 340px,
-      1017px 831px,
-      313px 977px;
+  100% {
+    background-position:
+      -14975px -2978px,
+      31112px 11187px,
+      -20081px 8981px,
+      11609px -3952px,
+      -12760px 12492px,
+      -9354px 2946px,
+      9553px 21574px,
+      946px 9057px;
   }
-  
-  .container::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    backdrop-filter: hue-rotate(90deg);
-    mask: linear-gradient(45deg, #0000, #000);
-    animation: rotaty 5s linear infinite;
-    transform-origin: center;
-  }
-  
-  @keyframes thingy {
-    0% {
-      filter: var(--f) hue-rotate(0deg);
-    }
-    100% {
-      filter: var(--f) hue-rotate(1turn);
-    }
-  }
-  
-  @keyframes blobs-1e28bd3d {
-    0% {
-      background-position:
-        271px 478px,
-        62px 291px,
-        67px 861px,
-        553px 413px,
-        36px 392px,
-        1077px 226px,
-        400px 799px,
-        7px 264px;
-    }
-    100% {
-      background-position:
-        -14975px -2978px,
-        31112px 11187px,
-        -20081px 8981px,
-        11609px -3952px,
-        -12760px 12492px,
-        -9354px 2946px,
-        9553px 21574px,
-        946px 9057px;
-    }
-  }
-  
-  @keyframes rotaty {
-    from { transform: rotate(0deg); }
-    to { transform: rotate(360deg); }
-  }
-  
-  /* ------------------------------
-     Foreground layout
-  ------------------------------ */
-  .content {
-    position: relative;
-    z-index: 2;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    height: 100%;
-    width: 100%;
-    box-sizing: border-box;
-    padding: 1rem;
-  }
-  
-  .video-container {
-    width: 80%;
-    max-width: 700px;
-  }
-  
-  .video-container video {
-    width: 100%;
-    border: 2px solid #fff;
-    border-radius: 8px;
-    outline: none;
-  }
-  
-  #waveform {
-    width: 80%;
-    max-width: 700px;
-    height: 128px;
-    background-color: rgba(255, 255, 255, 0.1);
-    border: 2px solid #fff;
-    border-radius: 8px;
-  }
-  
-  .controls {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    justify-content: center;
-  }
-  
-  /* Example for your other buttons */
-  button {
-    background-color: rgba(255, 255, 255, 0.2);
-    border: 2px solid #fff;
-    border-radius: 8px;
-    color: #fff;
-    padding: 0.6rem 1rem;
-    font-size: 1rem;
-    cursor: pointer;
-    transition: background-color 0.25s;
-    min-width: 120px;
-  }
-  
-  button:hover {
-    background-color: rgba(255, 255, 255, 0.4);
-  }
-  
-  button:active {
-    background-color: rgba(255, 255, 255, 0.5);
-  }
-  
-  /* ------------------------------
-     New Mic Toggle Snippet
-  ------------------------------ */
-  
-  /* 
-     .mic-toggle pins the label at the center bottom 
-     Increase bottom if you want more spacing 
-  */
-  .mic-toggle {
-    position: absolute;
-    bottom: 30px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 3;
-  }
-  
-  /*
-     EXACT style from your React code:
-     "container" is the label that includes input + SVG icons
-  */
-  .mic-toggle .container {
-    --color: #a5a5b0;
-    --size: 30px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    position: relative;
-    cursor: pointer;
-    font-size: var(--size);
-    user-select: none;
-    fill: var(--color);
-  }
-  
-  /* Mute slash icon is shown by default, then hidden if checked */
-  .mic-toggle .microphone-slash {
-    position: absolute;
-    animation: keyframes-fill 0.5s;
-  }
-  
-  .mic-toggle .microphone {
-    position: absolute;
-    display: none;
-    animation: keyframes-fill 0.5s;
-  }
-  
-  /* 
-     On check, hide slash, show normal mic 
-  */
-  .mic-toggle input:checked ~ .microphone-slash {
-    display: none;
-  }
-  
-  .mic-toggle input:checked ~ .microphone {
-    display: block;
-  }
-  
-  /* Hide default checkbox */
-  .mic-toggle input {
-    position: absolute;
+}
+
+@keyframes rotaty {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ------------------------------
+   Foreground layout
+------------------------------ */
+.content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  height: 100%;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 1rem;
+}
+
+.video-container {
+  width: 80%;
+  max-width: 700px;
+}
+
+.video-container video {
+  width: 100%;
+  border: 2px solid #fff;
+  border-radius: 8px;
+  outline: none;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: center;
+}
+
+/* Microphone toggle component styling */
+.mic-toggle {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+}
+.mic-toggle .container {
+  --color: #a5a5b0;
+  --size: 30px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
+  cursor: pointer;
+  font-size: var(--size);
+  user-select: none;
+  fill: var(--color);
+}
+
+.mic-toggle .container .microphone-slash {
+  position: absolute;
+  animation: keyframes-fill 0.5s;
+}
+
+.mic-toggle .container .microphone {
+  position: absolute;
+  display: none;
+  animation: keyframes-fill 0.5s;
+}
+
+.mic-toggle .container input:checked ~ .microphone-slash {
+  display: none;
+}
+
+.mic-toggle .container input:checked ~ .microphone {
+  display: block;
+}
+
+.mic-toggle .container input {
+  position: absolute;
+  opacity: 0;
+  cursor: pointer;
+  height: 0;
+  width: 0;
+}
+
+@keyframes keyframes-fill {
+  0% {
+    transform: rotate(0deg) scale(0);
     opacity: 0;
-    cursor: pointer;
-    height: 0;
-    width: 0;
   }
-  
-  /* The same fill animation you used */
-  @keyframes keyframes-fill {
-    0% {
-      transform: rotate(0deg) scale(0);
-      opacity: 0;
-    }
-    50% {
-      transform: rotate(-10deg) scale(1.2);
-    }
+  50% {
+    transform: rotate(-10deg) scale(1.2);
   }
-  
+}
+
+/* Full screen canvas overlay */
+#waveCanvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  /* Set a z-index below the mic toggle (e.g. 10) */
+  z-index: 10;
+}
