@@ -1,3 +1,5 @@
+# Media Generation Container: main.py
+
 import os
 import uuid
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
@@ -6,20 +8,17 @@ from pydantic import BaseModel
 from media_generation import generate_visual, generate_audio
 from tts_stt import generate_audio_google, transcribe_audio
 
-# === CONFIG ===
+# Ensure output directory exists
 OUTPUT_DIR = "./generated_media"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 app = FastAPI()
 
-# Request model
 class GenerationRequest(BaseModel):
     text: str
 
-# Store tasks
 TASKS_STATUS = {}
 
-# === Media generation tasks ===
 async def generate_audio_task(task_id: str, instruction: str):
     try:
         TASKS_STATUS[task_id] = "audio_started"
@@ -38,7 +37,6 @@ async def generate_visual_task(task_id: str, instruction: str):
     except Exception as e:
         TASKS_STATUS[task_id] = f"visual_error: {str(e)}"
 
-# === Endpoints ===
 @app.post("/generate/audio")
 def generate_audio_endpoint(request: GenerationRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
@@ -120,3 +118,8 @@ async def generate_transcript(file: UploadFile = File(...)):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+# Entry point: run on port 8000
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

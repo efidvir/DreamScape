@@ -1,22 +1,39 @@
-version: '3.8'
-
 services:
   frontend:
-    build: ./frontend_flask
+    build: ./content
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - mynetwork
+
+  backend:
+    build: ./backend
     ports:
       - "5000:5000"
+    depends_on:
+      - mediagen
+      - container_llm
+    networks:
+      - mynetwork
+    environment:
+      - MEDIA_GEN_URL=http://mediagen:5000
+      - LLM_URL=http://container_llm:5000
 
-  ai-logic:
-    build: ./ai_logic
+  mediagen:
+    build: ./MediaGen
     ports:
-      - "8000:8000"
+      - "5001:5000"
+    networks:
+      - mynetwork
 
-  media-generator:
-    build: ./media_generator
+  container_llm:
+    build: ./container_LLM
     ports:
-      - "8001:8001"
+      - "5002:5000"
+    networks:
+      - mynetwork
 
-  game-db:
-    build: ./game_db
-    ports:
-      - "8002:8002"
+networks:
+  mynetwork:

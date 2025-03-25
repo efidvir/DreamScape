@@ -25,10 +25,10 @@ function drawWaveform() {
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
 
-  // Clear canvas (fully transparent)
+  // Clear canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  // Set up glow effect with 60% opacity stroke
+  // Set up glow effect
   ctx.lineWidth = 2;
   ctx.shadowBlur = 20;
   ctx.shadowColor = waveformColor === "green"
@@ -57,7 +57,6 @@ function drawWaveform() {
 
 // Initialize waveform visualization using a provided stream
 function startMicVisualizationFromStream(stream) {
-  // Create a new audio context and analyser for drawing the waveform
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
   analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
@@ -68,7 +67,7 @@ function startMicVisualizationFromStream(stream) {
   drawWaveform();
 }
 
-// Clean up the waveform audio nodes and animation
+// Clean up audio nodes and animation
 function cleanupAudio() {
   try {
     if (source) source.disconnect();
@@ -83,7 +82,7 @@ function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-// === TTS Visualization Functions (unchanged) ===
+// === TTS Visualization Functions ===
 function startTTSVisualization(audioElement) {
   audioContext = new (window.AudioContext || window.webkitAudioContext)();
   analyser = audioContext.createAnalyser();
@@ -107,8 +106,8 @@ function stopTTSVisualization() {
 let webrtcId = Math.random().toString(36).substring(2, 10);
 let audioChunksForFastRTC = [];
 let recordingActive = false;
-let silenceThreshold = 0.05; // Adjust normalized threshold as needed
-let silenceTimeout = 2000;   // Time in ms to consider as silence
+let silenceThreshold = 0.05; // Adjust as needed
+let silenceTimeout = 2000;   // ms to consider as silence
 let silenceTimer = null;
 let mediaRecorderRTC;
 let micStreamRTC;
@@ -131,7 +130,7 @@ async function startFastRTCRecording() {
   // Start waveform visualization using the same stream
   startMicVisualizationFromStream(stream);
 
-  // Set up silence detection using a second analyser node from the same stream
+  // Set up silence detection
   const silenceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const silenceAnalyser = silenceAudioCtx.createAnalyser();
   const silenceSource = silenceAudioCtx.createMediaStreamSource(stream);
@@ -170,6 +169,7 @@ async function sendAudioToFastRTC() {
   micStreamRTC.getTracks().forEach(track => track.stop());
   recordingActive = false;
 
+  // Combine recorded chunks into a blob.
   const audioBlob = new Blob(audioChunksForFastRTC, { type: "audio/wav" });
   audioChunksForFastRTC = [];
   const formData = new FormData();
@@ -177,17 +177,22 @@ async function sendAudioToFastRTC() {
   formData.append("webrtc_id", webrtcId);
 
   try {
+    // Call the backend orchestrator endpoint which returns TTS audio as a blob.
     const response = await fetch("/input_hook", {
       method: "POST",
       body: formData
     });
-    const result = await response.json();
-    console.log("Audio sent to FastRTC, result:", result);
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.statusText}`);
+    }
+    const ttsBlob = await response.blob();
+    const ttsUrl = URL.createObjectURL(ttsBlob);
+    playTTS(ttsUrl);
   } catch (e) {
     console.error("Error sending audio to FastRTC:", e);
   }
 
-  // After TTS playback or a short delay, resume recording if mic is still on
+  // After TTS playback, resume recording if the mic is still enabled.
   setTimeout(() => {
     const micCheckbox = document.querySelector(".mic-toggle input");
     if (micCheckbox.checked) {
@@ -196,23 +201,11 @@ async function sendAudioToFastRTC() {
   }, 1000);
 }
 
-// === SSE Listener for FastRTC Outputs ===
-function listenForFastRTCOutput() {
-  const evtSource = new EventSource(`/outputs?webrtc_id=${webrtcId}`);
-  evtSource.onmessage = function(event) {
-    const data = JSON.parse(event.data);
-    console.log("Received output:", data);
-    if (data.ttsUrl) {
-      playTTS(data.ttsUrl);
-    }
-  };
-}
-
 // === TTS Playback Function ===
 function playTTS(ttsUrl) {
   const audio = new Audio(ttsUrl);
   const micCheckbox = document.querySelector(".mic-toggle input");
-  micCheckbox.disabled = true; // disable mic during TTS
+  micCheckbox.disabled = true; // Disable mic during TTS playback
   audio.onplay = () => startTTSVisualization(audio);
   audio.onended = () => {
     stopTTSVisualization();
@@ -240,5 +233,4 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
-  listenForFastRTCOutput();
 });
