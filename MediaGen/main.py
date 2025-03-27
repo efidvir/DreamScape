@@ -1,8 +1,6 @@
-# Media Generation Container: main.py
-
 import os
 import uuid
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Form
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from media_generation import generate_visual, generate_audio
@@ -19,6 +17,7 @@ class GenerationRequest(BaseModel):
 
 TASKS_STATUS = {}
 
+# ------------------ Background Task Handlers ------------------
 async def generate_audio_task(task_id: str, instruction: str):
     try:
         TASKS_STATUS[task_id] = "audio_started"
@@ -37,6 +36,7 @@ async def generate_visual_task(task_id: str, instruction: str):
     except Exception as e:
         TASKS_STATUS[task_id] = f"visual_error: {str(e)}"
 
+# --------------------- Endpoints ----------------------
 @app.post("/generate/audio")
 def generate_audio_endpoint(request: GenerationRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
@@ -82,13 +82,21 @@ def cleanup(task_id: str):
     TASKS_STATUS.pop(task_id, None)
     return JSONResponse({"task_id": task_id, "status": "cleaned up"})
 
+# ----------------- Speech-to-Text Endpoint -----------------
 @app.post("/stt")
-async def speech_to_text(file: UploadFile = File(...)):
+async def speech_to_text(
+    file: UploadFile = File(..., alias="audio"),
+    webrtc_id: str = Form(None)
+):
+    """
+    Process the uploaded audio file for speech-to-text.
+    Pass the sample rate as a positional argument (48000 Hz) to match the audio header.
+    """
     temp_path = f"temp_{uuid.uuid4()}.wav"
     with open(temp_path, "wb") as f:
         f.write(await file.read())
     try:
-        transcript = await transcribe_audio(temp_path)
+        transcript = await transcribe_audio(temp_path, 48000)
         return {"transcript": transcript}
     finally:
         os.remove(temp_path)
@@ -109,7 +117,7 @@ async def generate_transcript(file: UploadFile = File(...)):
     with open(temp_path, "wb") as f:
         f.write(await file.read())
     try:
-        transcript = await transcribe_audio(temp_path)
+        transcript = await transcribe_audio(temp_path, 48000)
         TASKS_STATUS[task_id] = "transcript_generated"
         transcript_path = os.path.join(OUTPUT_DIR, f"{task_id}_transcript.txt")
         with open(transcript_path, "w", encoding="utf-8") as f:
@@ -119,7 +127,49 @@ async def generate_transcript(file: UploadFile = File(...)):
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-# Entry point: run on port 8000
+# ----------------- Dummy STT Acknowledgment Endpoint -----------------
+@app.post("/stt_ack")
+async def stt_ack(
+    file: UploadFile = File(..., alias="audio"),
+    webrtc_id: str = Form(None)
+):
+    """
+    Dummy endpoint to acknowledge reception of an STT file.
+    It does not process the file; it only returns a confirmation message.
+    """
+    return JSONResponse({"message": "STT received"}, status_code=200)
+
+# ----------------- Debug Echo Response Endpoint -----------------
+@app.post("/debug_response")
+async def debug_response(
+    file: UploadFile = File(..., alias="audio"),
+    webrtc_id: str = Form(None)
+):
+    """
+    Debug endpoint to simulate a response from the LLM after transcript and TTS.
+    For debugging, it simply echoes back the same audio file that was received.
+    """
+    temp_path = f"debug_{uuid.uuid4()}.wav"
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+    
+    # Schedule removal of the temporary file after sending the response.
+    background_tasks = BackgroundTasks()
+    background_tasks.add_task(os.remove, temp_path)
+    
+    return FileResponse(
+        temp_path,
+        media_type=file.content_type,
+        filename=file.filename,
+        background=background_tasks
+    )
+
+# --- Health check route ---
+@app.get("/healthz")
+def health():
+    return JSONResponse({"status": "OK"})
+
+# --- Run the server on port 9001 ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=9001)

@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <title>AI Interaction</title>
+  <!-- Link to your CSS file -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
 </head>
 <body>
@@ -18,7 +19,7 @@
       </div>
     </div>
 
-    <!-- Microphone toggle (using the same markup as your React component) -->
+    <!-- Microphone toggle (same markup you had) -->
     <div class="mic-toggle">
       <label class="container">
         <input defaultChecked="checked" type="checkbox" />
@@ -37,6 +38,15 @@
   <!-- Full-screen canvas for waveform visualization -->
   <canvas id="waveCanvas"></canvas>
 
+  <!-- Circles showing container health -->
+  <div id="healthStatusContainer">
+    <div id="status_frontend"  class="health-circle" title="Frontend"></div>
+    <div id="status_backend"   class="health-circle" title="Backend"></div>
+    <div id="status_mediagen"  class="health-circle" title="MediaGen"></div>
+    <div id="status_llm"       class="health-circle" title="LLM"></div>
+  </div>
+
+  <!-- Main JS -->
   <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

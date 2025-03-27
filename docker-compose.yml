@@ -18,20 +18,20 @@ services:
     networks:
       - mynetwork
     environment:
-      - MEDIA_GEN_URL=http://mediagen:5000
-      - LLM_URL=http://container_llm:5000
+      - MEDIA_GEN_URL=http://mediagen:9001
+      - LLM_URL=http://container_llm:9000
 
   mediagen:
     build: ./MediaGen
     ports:
-      - "5001:5000"
+      - "5001:9001"
     networks:
       - mynetwork
 
   container_llm:
     build: ./container_LLM
     ports:
-      - "5002:5000"
+      - "5002:9000"
     networks:
       - mynetwork
 

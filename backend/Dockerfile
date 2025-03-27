@@ -1,5 +1,9 @@
 FROM python:3.9-slim
 
+
+# Install tcpdump
+RUN apt-get update && apt-get install -y tcpdump
+
 WORKDIR /app
 
 # Copy and install Python dependencies.
@@ -14,3 +18,4 @@ EXPOSE 5000
 
 # Start the Flask app.
 CMD ["python", "app.py"]
+
