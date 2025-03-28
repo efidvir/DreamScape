@@ -3,13 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <title>AI Interaction</title>
-  <!-- Link to your CSS file -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
 </head>
 <body>
   <div class="pattern">
     <div class="container"></div>
-
     <div class="content">
       <div class="video-container">
         <video id="video" src="your-video.mp4" controls></video>
@@ -18,8 +16,6 @@
         <p>Speak to the LLM by toggling the microphone below.</p>
       </div>
     </div>
-
-    <!-- Microphone toggle (same markup you had) -->
     <div class="mic-toggle">
       <label class="container">
         <input defaultChecked="checked" type="checkbox" />
@@ -34,19 +30,13 @@
       </label>
     </div>
   </div>
-
-  <!-- Full-screen canvas for waveform visualization -->
   <canvas id="waveCanvas"></canvas>
-
-  <!-- Circles showing container health -->
   <div id="healthStatusContainer">
-    <div id="status_frontend"  class="health-circle" title="Frontend"></div>
-    <div id="status_backend"   class="health-circle" title="Backend"></div>
-    <div id="status_mediagen"  class="health-circle" title="MediaGen"></div>
-    <div id="status_llm"       class="health-circle" title="LLM"></div>
+    <div id="status_frontend" class="health-circle" title="Frontend"></div>
+    <div id="status_backend" class="health-circle" title="Backend"></div>
+    <div id="status_mediagen" class="health-circle" title="MediaGen"></div>
+    <div id="status_llm" class="health-circle" title="LLM"></div>
   </div>
-
-  <!-- Main JS -->
   <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>

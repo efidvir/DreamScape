@@ -1,5 +1,25 @@
+// Global AudioContext re-used for all operations
+let globalAudioContext = null;
+function getAudioContext() {
+  if (!globalAudioContext) {
+    globalAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    console.log("Global AudioContext created.");
+  }
+  return globalAudioContext;
+}
+
+// Resume AudioContext on any user gesture (click)
+document.addEventListener("click", () => {
+  const ctx = getAudioContext();
+  if (ctx.state === "suspended") {
+    ctx.resume().then(() => {
+      console.log("Global AudioContext resumed on user gesture.");
+    });
+  }
+});
+
 // === Global Variables for Waveform Visualization ===
-let audioContext;
+let audioContext; // will use the globalAudioContext
 let analyser;
 let source;
 let animationId;
@@ -20,15 +40,10 @@ resizeCanvas();
 function drawWaveform() {
   animationId = requestAnimationFrame(drawWaveform);
   if (!analyser) return;
-
   const bufferLength = analyser.fftSize;
   const dataArray = new Uint8Array(bufferLength);
   analyser.getByteTimeDomainData(dataArray);
-
-  // Clear canvas
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // Set up glow effect based on current mode: green for mic, purple for TTS
   ctx.lineWidth = 2;
   ctx.shadowBlur = 20;
   ctx.shadowColor = waveformColor === "green" 
@@ -37,11 +52,10 @@ function drawWaveform() {
   ctx.strokeStyle = waveformColor === "green" 
     ? "rgba(0,255,0,0.8)" 
     : "rgba(160,32,240,0.8)";
-
   ctx.beginPath();
-  const sliceWidth = canvas.width / bufferLength;
+  const sliceWidth = canvas.width / analyser.fftSize;
   let x = 0;
-  for (let i = 0; i < bufferLength; i++) {
+  for (let i = 0; i < analyser.fftSize; i++) {
     const v = dataArray[i] / 128.0;
     const y = (v * canvas.height) / 2;
     if (i === 0) {
@@ -57,7 +71,7 @@ function drawWaveform() {
 
 // Initialize waveform visualization for microphone recording
 function startMicVisualizationFromStream(stream) {
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  audioContext = getAudioContext();
   analyser = audioContext.createAnalyser();
   analyser.fftSize = 2048;
   source = audioContext.createMediaStreamSource(stream);
@@ -67,12 +81,10 @@ function startMicVisualizationFromStream(stream) {
   drawWaveform();
 }
 
-// Clean up audio nodes and animation
 function cleanupAudio() {
   try {
     if (source) source.disconnect();
     if (analyser) analyser.disconnect();
-    if (audioContext) audioContext.close();
   } catch (e) {
     console.error("Error during cleanup:", e);
   }
@@ -82,14 +94,10 @@ function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-// Initialize TTS visualization (waveform turns purple)
-function startTTSVisualization(audioElement) {
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  analyser = audioContext.createAnalyser();
-  analyser.fftSize = 2048;
-  source = audioContext.createMediaElementSource(audioElement);
-  source.connect(analyser);
-  currentMode = "tts";
+// (For TTS visualization, we now create a dedicated analyser when playing TTS)
+function startTTSVisualizationWithAnalyser(ttsAnalyser) {
+  // Set our global analyser to the one for TTS playback and start drawing
+  analyser = ttsAnalyser;
   waveformColor = "purple";
   drawWaveform();
 }
@@ -102,42 +110,38 @@ function stopTTSVisualization() {
 }
 
 // === Continuous Voice Chat with Silence Detection ===
-
 let webrtcId = Math.random().toString(36).substring(2, 10);
 let audioChunksForFastRTC = [];
 let recordingActive = false;
 let silenceThreshold = 0.05; // Adjust threshold as needed
-let silenceTimeout = 2000;   // ms to consider as silence (end of query)
+let silenceTimeout = 2000;   // ms of silence before sending audio
 let silenceTimer = null;
 let mediaRecorderRTC;
 let micStreamRTC;
 
 async function startFastRTCRecording() {
-  // Get microphone stream
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  // Request explicit constraints to help capture audio correctly
+  const stream = await navigator.mediaDevices.getUserMedia({ 
+    audio: { sampleRate: 44100, channelCount: 1 } 
+  });
   micStreamRTC = stream;
   recordingActive = true;
   audioChunksForFastRTC = [];
-
-  // Set up MediaRecorder for capturing audio chunks
-  mediaRecorderRTC = new MediaRecorder(stream);
+  mediaRecorderRTC = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
   mediaRecorderRTC.ondataavailable = (event) => {
     if (event.data.size > 0) {
       audioChunksForFastRTC.push(event.data);
     }
   };
-
-  // Start visualization in mic mode (green)
   startMicVisualizationFromStream(stream);
-
-  // Set up silence detection with a separate analyser
+  
   const silenceAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
   const silenceAnalyser = silenceAudioCtx.createAnalyser();
   const silenceSource = silenceAudioCtx.createMediaStreamSource(stream);
   silenceSource.connect(silenceAnalyser);
   silenceAnalyser.fftSize = 2048;
   const dataArrayRTC = new Uint8Array(silenceAnalyser.fftSize);
-
+  
   function checkSilence() {
     silenceAnalyser.getByteTimeDomainData(dataArrayRTC);
     let sum = 0;
@@ -147,15 +151,15 @@ async function startFastRTCRecording() {
     let avg = sum / dataArrayRTC.length / 128;
     if (avg < silenceThreshold) {
       if (!silenceTimer) {
-        // Silence detected, so wait a bit then send audio
+        console.log("Silence detected, will send audio after timeout...");
         silenceTimer = setTimeout(() => {
           sendAudioToFastRTC();
           silenceTimer = null;
         }, silenceTimeout);
       }
     } else {
-      // Reset the silence timer if user is still speaking
       if (silenceTimer) {
+        console.log("User resumed speaking, clearing silence timer.");
         clearTimeout(silenceTimer);
         silenceTimer = null;
       }
@@ -167,29 +171,27 @@ async function startFastRTCRecording() {
 
 async function sendAudioToFastRTC() {
   if (audioChunksForFastRTC.length === 0) return;
-  // Stop recording and microphone stream
   mediaRecorderRTC.stop();
   micStreamRTC.getTracks().forEach(track => track.stop());
   recordingActive = false;
-
-  // Combine recorded chunks into a blob
-  const audioBlob = new Blob(audioChunksForFastRTC, { type: "audio/wav" });
+  const mimeType = mediaRecorderRTC.mimeType || "audio/webm";
+  const audioBlob = new Blob(audioChunksForFastRTC, { type: mimeType });
+  console.log("Recorded audio blob size:", audioBlob.size, "MIME:", mimeType);
   audioChunksForFastRTC = [];
   const formData = new FormData();
   formData.append("audio", audioBlob);
   formData.append("webrtc_id", webrtcId);
-
+  
   try {
-    // Send audio query to backend
-    const response = await fetch("/input_hook", {
+    const response = await fetch("/debug_response", {
       method: "POST",
       body: formData
     });
     if (!response.ok) {
       throw new Error(`Server error: ${response.statusText}`);
     }
-    // Receive the TTS audio response as a blob
     const ttsBlob = await response.blob();
+    console.log("Received TTS blob size:", ttsBlob.size);
     const ttsUrl = URL.createObjectURL(ttsBlob);
     playTTS(ttsUrl);
   } catch (e) {
@@ -197,24 +199,63 @@ async function sendAudioToFastRTC() {
   }
 }
 
+// Updated playTTS using Web Audio API for playback and visualization
 function playTTS(ttsUrl) {
-  const audio = new Audio(ttsUrl);
-  // Disable the mic toggle during playback
-  const micCheckbox = document.querySelector(".mic-toggle input");
-  micCheckbox.disabled = true;
-  audio.onplay = () => {
-    // Change waveform color to purple for TTS playback
-    startTTSVisualization(audio);
+  console.log("Attempting to play TTS via Web Audio API from URL:", ttsUrl);
+  const ctx = getAudioContext();
+  fetch(ttsUrl)
+    .then(response => response.arrayBuffer())
+    .then(arrayBuffer => ctx.decodeAudioData(arrayBuffer))
+    .then(audioBuffer => {
+      const sourceNode = ctx.createBufferSource();
+      sourceNode.buffer = audioBuffer;
+      
+      // Create an analyser for TTS playback visualization
+      const ttsAnalyser = ctx.createAnalyser();
+      ttsAnalyser.fftSize = 2048;
+      
+      // Connect the source to the analyser and then to the destination
+      sourceNode.connect(ttsAnalyser);
+      ttsAnalyser.connect(ctx.destination);
+      
+      // Set the waveform color to purple and start visualization using this analyser
+      startTTSVisualizationWithAnalyser(ttsAnalyser);
+      
+      sourceNode.start(0);
+      console.log("TTS audio playback started via Web Audio API.");
+      
+      sourceNode.onended = () => {
+        console.log("TTS audio playback ended via Web Audio API.");
+        cancelAnimationFrame(animationId);
+        clearCanvas();
+        const micCheckbox = document.querySelector(".mic-toggle input");
+        micCheckbox.disabled = false;
+        if (micCheckbox.checked) {
+          startFastRTCRecording();
+        }
+      };
+    })
+    .catch(err => {
+      console.error("Error decoding/playing TTS audio:", err);
+    });
+}
+
+// Test function to play background music (via HTML5 Audio)
+function playTestAudio() {
+  const testAudioUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
+  const testAudio = new Audio(testAudioUrl);
+  testAudio.volume = 1.0;
+  testAudio.onplay = () => {
+    console.log("Test audio is playing.");
   };
-  audio.onended = () => {
-    // Once TTS finishes, stop visualization, re-enable mic, and restart recording
-    stopTTSVisualization();
-    micCheckbox.disabled = false;
-    if (micCheckbox.checked) {
-      startFastRTCRecording();
-    }
+  testAudio.onerror = (err) => {
+    console.error("Error playing test audio:", err);
   };
-  audio.play();
+  testAudio.play().then(() => {
+    console.log("Test audio play() resolved.");
+  }).catch((err) => {
+    console.error("Test audio play() failed:", err);
+  });
 }
 
 // === Mic Toggle Control ===
@@ -233,31 +274,24 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     }
   });
-  // Automatically start recording if mic toggle is enabled on page load
   if (micCheckbox.checked) {
     startFastRTCRecording();
   }
-
-  // **NEW**: Subscribe to keepalive SSE
   setupKeepaliveSSE();
+  // Uncomment the line below to test background music playback:
+  // playTestAudio();
 });
 
-/**
- * Sets up an SSE connection to /keepalive to get container statuses.
- */
 function setupKeepaliveSSE() {
   const evtSource = new EventSource("/keepalive");
   evtSource.onmessage = function(event) {
     try {
-      // Data might look like: {frontend:'alive', backend:'alive', mediagen:'dead', llm:'alive'}
-      // We'll parse it out. If your server sends double quotes, you can do JSON.parse(event.data).
       const dataStr = event.data.replace(/'/g, '"');
       const statusObj = JSON.parse(dataStr);
-
-      updateCircleColor("status_frontend",  statusObj.frontend);
-      updateCircleColor("status_backend",   statusObj.backend);
-      updateCircleColor("status_mediagen",  statusObj.mediagen);
-      updateCircleColor("status_llm",       statusObj.llm);
+      updateCircleColor("status_frontend", statusObj.frontend);
+      updateCircleColor("status_backend", statusObj.backend);
+      updateCircleColor("status_mediagen", statusObj.mediagen);
+      updateCircleColor("status_llm", statusObj.llm);
     } catch (err) {
       console.error("Error parsing keepalive data:", err, event.data);
     }
