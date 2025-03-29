@@ -65,22 +65,23 @@ def home():
 def input_hook():
     """
     Receives audio from the browser (FormData with 'audio' and 'webrtc_id')
-    and forwards it to the MediaGen container for STT processing.
-    (Use /debug_response to simulate a dummy echo response.)
+    and forwards it to the MediaGen container for transcript processing.
+    Note: Instead of posting to /stt, we now forward to /generate/transcript.
     """
     user_audio = request.files.get("audio")
     webrtc_id = request.form.get("webrtc_id", "no_id_provided")
     if not user_audio:
         return jsonify({"error": "No audio file provided"}), 400
 
-    forward_url = "http://mediagen:9001/stt"
+    # Forward to the mediagen container's /generate/transcript endpoint.
+    forward_url = "http://mediagen:9001/generate/transcript"
     files = {
         "audio": (user_audio.filename, user_audio.stream, user_audio.mimetype)
     }
     data = {"webrtc_id": webrtc_id}
 
     try:
-        response = requests.post(forward_url, files=files, data=data)
+        response = requests.post(forward_url, files=files, data=data, timeout=30)
         response.raise_for_status()
     except requests.RequestException as e:
         return jsonify({"error": f"MediaGen service error: {e}"}), 500
@@ -211,13 +212,17 @@ def cleanup(task_id: str):
 
 @app.route("/stt", methods=["POST"])
 def speech_to_text():
+    """
+    This endpoint is kept for backward compatibility.
+    It returns a dummy transcript.
+    """
     file = request.files.get("audio")
     webrtc_id = request.form.get("webrtc_id", "no_id_provided")
     if not file:
         return jsonify({"error": "No audio file provided"}), 400
     temp_path = os.path.join(OUTPUT_DIR, f"temp_{uuid.uuid4()}.wav")
     file.save(temp_path)
-    transcript = "dummy transcript"
+    transcript = "ggggg transcript"
     os.remove(temp_path)
     return jsonify({"transcript": transcript})
 
@@ -236,14 +241,36 @@ def generate_transcript():
     file = request.files.get("audio")
     if not file:
         return jsonify({"error": "No audio file provided"}), 400
+
+    # Generate a unique task ID and temporary file path.
     task_id = str(uuid.uuid4())
     temp_path = os.path.join(OUTPUT_DIR, f"{task_id}_input.wav")
     file.save(temp_path)
-    transcript = "dummy transcript"
+
+    try:
+        # Forward the audio file to the mediagen container's /stt endpoint.
+        # (This endpoint should perform the actual transcription.)
+        with open(temp_path, "rb") as f:
+            files = {"audio": (file.filename, f, file.mimetype)}
+            data = {"webrtc_id": "dummy"}  # Adjust or pass a real ID if needed.
+            response = requests.post("http://mediagen:9001/generate/transcript", files=files, data=data, timeout=30)
+            response.raise_for_status()
+            transcript_data = response.json()
+            transcript = transcript_data.get("transcript", "No transcript received")
+    except requests.exceptions.Timeout:
+        transcript = "Transcript request timed out"
+    except Exception as e:
+        transcript = f"Error: {e}"
+    finally:
+        # Remove the temporary audio file.
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+    # Optionally, save the transcript to a file (for logging or debugging).
     transcript_path = os.path.join(OUTPUT_DIR, f"{task_id}_transcript.txt")
     with open(transcript_path, "w", encoding="utf-8") as f:
         f.write(transcript)
-    os.remove(temp_path)
+
     return jsonify({"task_id": task_id, "transcript": transcript})
 
 @app.route("/stt_ack", methods=["POST"])

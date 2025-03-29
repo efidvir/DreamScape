@@ -8,7 +8,7 @@ function getAudioContext() {
   return globalAudioContext;
 }
 
-// Resume AudioContext on any user gesture (click)
+// Resume AudioContext on user gesture
 document.addEventListener("click", () => {
   const ctx = getAudioContext();
   if (ctx.state === "suspended") {
@@ -19,11 +19,11 @@ document.addEventListener("click", () => {
 });
 
 // === Global Variables for Waveform Visualization ===
-let audioContext; // will use the globalAudioContext
+let audioContext; // will use globalAudioContext
 let analyser;
 let source;
 let animationId;
-let currentMode = null; // "mic" for recording, "tts" for playback
+let currentMode = null; // "mic" for recording, "transcript" flow after recording
 let waveformColor = "green"; // default: green when recording
 
 // Canvas setup
@@ -36,7 +36,6 @@ function resizeCanvas() {
 window.addEventListener("resize", resizeCanvas);
 resizeCanvas();
 
-// Draw the waveform on the canvas with glow effect
 function drawWaveform() {
   animationId = requestAnimationFrame(drawWaveform);
   if (!analyser) return;
@@ -69,7 +68,6 @@ function drawWaveform() {
   ctx.stroke();
 }
 
-// Initialize waveform visualization for microphone recording
 function startMicVisualizationFromStream(stream) {
   audioContext = getAudioContext();
   analyser = audioContext.createAnalyser();
@@ -94,19 +92,43 @@ function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-// (For TTS visualization, we now create a dedicated analyser when playing TTS)
-function startTTSVisualizationWithAnalyser(ttsAnalyser) {
-  // Set our global analyser to the one for TTS playback and start drawing
-  analyser = ttsAnalyser;
-  waveformColor = "purple";
-  drawWaveform();
-}
-function stopTTSVisualization() {
-  if (animationId) {
-    cancelAnimationFrame(animationId);
+// Popup for transcript display at top left with a container frame
+function showTranscriptPopup(transcript) {
+  let popup = document.getElementById("transcript-popup");
+  if (!popup) {
+    popup = document.createElement("div");
+    popup.id = "transcript-popup";
+    // Styling similar to the reference design
+    popup.style.position = "fixed";
+    popup.style.top = "20px";
+    popup.style.left = "20px";
+    popup.style.backgroundColor = "rgba(0, 0, 0, 0.85)";
+    popup.style.color = "#fff";
+    popup.style.padding = "15px 20px";
+    popup.style.border = "2px solid #fff";
+    popup.style.borderRadius = "8px";
+    popup.style.boxShadow = "0 4px 8px rgba(0, 0, 0, 0.3)";
+    popup.style.zIndex = "9999";
+    popup.style.fontSize = "1.1em";
+    popup.style.maxWidth = "300px";
+    document.body.appendChild(popup);
   }
-  cleanupAudio();
-  clearCanvas();
+  popup.textContent = transcript;
+  popup.style.display = "block";
+  popup.style.opacity = "1";
+  // Fade out after 5 seconds
+  setTimeout(() => {
+    popup.style.transition = "opacity 1s ease-out";
+    popup.style.opacity = "0";
+    setTimeout(() => {
+      popup.style.display = "none";
+    }, 1000);
+  }, 5000);
+}
+
+function displayTranscript(transcript) {
+  console.log("Transcript:", transcript);
+  showTranscriptPopup(transcript);
 }
 
 // === Continuous Voice Chat with Silence Detection ===
@@ -120,7 +142,7 @@ let mediaRecorderRTC;
 let micStreamRTC;
 
 async function startFastRTCRecording() {
-  // Request explicit constraints to help capture audio correctly
+  // Request explicit audio constraints to help capture audio correctly
   const stream = await navigator.mediaDevices.getUserMedia({ 
     audio: { sampleRate: 44100, channelCount: 1 } 
   });
@@ -183,79 +205,20 @@ async function sendAudioToFastRTC() {
   formData.append("webrtc_id", webrtcId);
   
   try {
-    const response = await fetch("/debug_response", {
+    // Note: The endpoint is now "/generate/transcript" to receive a proper transcript.
+    const response = await fetch("/generate/transcript", {
       method: "POST",
       body: formData
     });
     if (!response.ok) {
       throw new Error(`Server error: ${response.statusText}`);
     }
-    const ttsBlob = await response.blob();
-    console.log("Received TTS blob size:", ttsBlob.size);
-    const ttsUrl = URL.createObjectURL(ttsBlob);
-    playTTS(ttsUrl);
+    const data = await response.json();
+    console.log("Transcript received:", data.transcript);
+    displayTranscript(data.transcript);
   } catch (e) {
-    console.error("Error sending audio to backend:", e);
+    console.error("Error sending audio for transcript:", e);
   }
-}
-
-// Updated playTTS using Web Audio API for playback and visualization
-function playTTS(ttsUrl) {
-  console.log("Attempting to play TTS via Web Audio API from URL:", ttsUrl);
-  const ctx = getAudioContext();
-  fetch(ttsUrl)
-    .then(response => response.arrayBuffer())
-    .then(arrayBuffer => ctx.decodeAudioData(arrayBuffer))
-    .then(audioBuffer => {
-      const sourceNode = ctx.createBufferSource();
-      sourceNode.buffer = audioBuffer;
-      
-      // Create an analyser for TTS playback visualization
-      const ttsAnalyser = ctx.createAnalyser();
-      ttsAnalyser.fftSize = 2048;
-      
-      // Connect the source to the analyser and then to the destination
-      sourceNode.connect(ttsAnalyser);
-      ttsAnalyser.connect(ctx.destination);
-      
-      // Set the waveform color to purple and start visualization using this analyser
-      startTTSVisualizationWithAnalyser(ttsAnalyser);
-      
-      sourceNode.start(0);
-      console.log("TTS audio playback started via Web Audio API.");
-      
-      sourceNode.onended = () => {
-        console.log("TTS audio playback ended via Web Audio API.");
-        cancelAnimationFrame(animationId);
-        clearCanvas();
-        const micCheckbox = document.querySelector(".mic-toggle input");
-        micCheckbox.disabled = false;
-        if (micCheckbox.checked) {
-          startFastRTCRecording();
-        }
-      };
-    })
-    .catch(err => {
-      console.error("Error decoding/playing TTS audio:", err);
-    });
-}
-
-// Test function to play background music (via HTML5 Audio)
-function playTestAudio() {
-  const testAudioUrl = "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3";
-  const testAudio = new Audio(testAudioUrl);
-  testAudio.volume = 1.0;
-  testAudio.onplay = () => {
-    console.log("Test audio is playing.");
-  };
-  testAudio.onerror = (err) => {
-    console.error("Error playing test audio:", err);
-  };
-  testAudio.play().then(() => {
-    console.log("Test audio play() resolved.");
-  }).catch((err) => {
-    console.error("Test audio play() failed:", err);
-  });
 }
 
 // === Mic Toggle Control ===
@@ -278,8 +241,6 @@ document.addEventListener("DOMContentLoaded", () => {
     startFastRTCRecording();
   }
   setupKeepaliveSSE();
-  // Uncomment the line below to test background music playback:
-  // playTestAudio();
 });
 
 function setupKeepaliveSSE() {

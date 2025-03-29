@@ -5,6 +5,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from media_generation import generate_visual, generate_audio
 from tts_stt import generate_audio_google, transcribe_audio
+import subprocess
 
 # Ensure output directory exists
 OUTPUT_DIR = "./generated_media"
@@ -110,22 +111,56 @@ async def text_to_speech(data: dict):
     await generate_audio_google(text, output_path)
     return FileResponse(output_path, media_type="audio/wav")
 
+import os
+import uuid
+import subprocess
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import JSONResponse
+
+# Assume these are defined/imported as needed:
+# OUTPUT_DIR, TASKS_STATUS, and the asynchronous transcribe_audio() function
+
+app = FastAPI()
+
 @app.post("/generate/transcript")
-async def generate_transcript(file: UploadFile = File(...)):
+async def generate_transcript(file: UploadFile = File(..., alias="audio")):
     task_id = str(uuid.uuid4())
-    temp_path = os.path.join(OUTPUT_DIR, f"{task_id}_input.wav")
-    with open(temp_path, "wb") as f:
+    
+    # Save the incoming file with its original extension (if available)
+    original_ext = os.path.splitext(file.filename)[1] or ".wav"
+    temp_input_path = os.path.join(OUTPUT_DIR, f"{task_id}_input{original_ext}")
+    with open(temp_input_path, "wb") as f:
         f.write(await file.read())
+    
+    # Convert the audio file to a Google-compatible WAV file:
+    # Linear16 encoding, 48000 Hz sample rate, mono channel.
+    converted_path = os.path.join(OUTPUT_DIR, f"{task_id}_converted.wav")
     try:
-        transcript = await transcribe_audio(temp_path, 48000)
+        subprocess.run([
+            "ffmpeg", "-y",              # Overwrite output if exists
+            "-i", temp_input_path,         # Input file
+            "-ar", "48000",                # Set sample rate to 48000 Hz
+            "-ac", "1",                    # Set to mono audio
+            "-f", "wav",                   # Force WAV output format
+            converted_path                 # Output file
+        ], check=True)
+    except Exception as e:
+        # Clean up and return an error if conversion fails
+        if os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+        return JSONResponse({"task_id": task_id, "transcript": f"Error converting file: {e}"})
+    
+    try:
+        # Call your transcription function with the converted file.
+        transcript = await transcribe_audio(converted_path, 48000)
         TASKS_STATUS[task_id] = "transcript_generated"
-        transcript_path = os.path.join(OUTPUT_DIR, f"{task_id}_transcript.txt")
-        with open(transcript_path, "w", encoding="utf-8") as f:
-            f.write(transcript)
         return JSONResponse({"task_id": task_id, "transcript": transcript})
     finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+        # Clean up temporary files.
+        if os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+        if os.path.exists(converted_path):
+            os.remove(converted_path)
 
 # ----------------- Dummy STT Acknowledgment Endpoint -----------------
 @app.post("/stt_ack")
