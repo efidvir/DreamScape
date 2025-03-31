@@ -1,11 +1,12 @@
 import os
 import uuid
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Form
+import subprocess
+import httpx
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request, Form
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from media_generation import generate_visual, generate_audio
-from tts_stt import generate_audio_google, transcribe_audio
-import subprocess
+from media_generation import generate_visual, generate_audio  # if needed for other endpoints
+from tts_stt import generate_audio_google, transcribe_audio  # your implementations
 
 # Ensure output directory exists
 OUTPUT_DIR = "./generated_media"
@@ -37,7 +38,7 @@ async def generate_visual_task(task_id: str, instruction: str):
     except Exception as e:
         TASKS_STATUS[task_id] = f"visual_error: {str(e)}"
 
-# --------------------- Endpoints ----------------------
+# --------------------- Other Endpoints ----------------------
 @app.post("/generate/audio")
 def generate_audio_endpoint(request: GenerationRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
@@ -83,24 +84,96 @@ def cleanup(task_id: str):
     TASKS_STATUS.pop(task_id, None)
     return JSONResponse({"task_id": task_id, "status": "cleaned up"})
 
-# ----------------- Speech-to-Text Endpoint -----------------
+# ----------------- Transcription, LLM, and TTS Integration -----------------
+@app.post("/generate/transcript")
+async def generate_transcript(file: UploadFile = File(..., alias="audio")):
+    task_id = str(uuid.uuid4())
+    
+    # Save the uploaded file
+    original_ext = os.path.splitext(file.filename)[1] or ".wav"
+    temp_input_path = os.path.join(OUTPUT_DIR, f"{task_id}_input{original_ext}")
+    file_content = await file.read()
+    with open(temp_input_path, "wb") as f:
+        f.write(file_content)
+    
+    # Convert the audio to a Google-compatible WAV (suppress FFmpeg logs)
+    converted_path = os.path.join(OUTPUT_DIR, f"{task_id}_converted.wav")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y",
+            "-loglevel", "error",
+            "-i", temp_input_path,
+            "-ar", "48000",
+            "-ac", "1",
+            "-f", "wav",
+            converted_path
+        ], check=True)
+    except Exception as e:
+        if os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+        return JSONResponse({"task_id": task_id, "transcript": f"Error converting file: {e}"})
+    
+    # Transcribe the converted audio
+    try:
+        transcript = await transcribe_audio(converted_path, 48000)
+        TASKS_STATUS[task_id] = "transcript_generated"
+    finally:
+        if os.path.exists(temp_input_path):
+            os.remove(temp_input_path)
+        if os.path.exists(converted_path):
+            os.remove(converted_path)
+    
+    # Send transcript to the LLM container
+    llm_url = "http://container_llm:9000/generate"
+    llm_payload = {"transcript": transcript, "session_id": task_id}
+    try:
+        async with httpx.AsyncClient() as client:
+            llm_resp = await client.post(llm_url, json=llm_payload, timeout=30.0)
+            llm_resp.raise_for_status()
+            llm_data = llm_resp.json()
+            llm_text = llm_data.get("response", "")
+    except Exception as e:
+        llm_text = f"Error contacting LLM: {e}"
+    
+    # Log the LLM response for debugging.
+    print("LLM Response:", llm_text)
+    
+    # Generate TTS audio for the LLM response
+    tts_path = os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav")
+    try:
+        await generate_audio_google(llm_text, tts_path)
+    except Exception as e:
+        tts_path = None
+        llm_text += f" [TTS generation error: {e}]"
+    
+    # Return combined response (with the LLM response)
+    response_payload = {
+        "task_id": task_id,
+        "transcript": transcript,
+        "llm_response": llm_text,
+        "tts_audio_url": f"/download/tts/{task_id}" if tts_path and os.path.exists(tts_path) else ""
+    }
+    return JSONResponse(response_payload)
+
+@app.get("/download/tts/{task_id}")
+def get_tts_audio(task_id: str):
+    tts_path = os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav")
+    if os.path.exists(tts_path):
+        return FileResponse(tts_path, media_type="audio/wav", filename=f"{task_id}_tts.wav")
+    raise HTTPException(status_code=404, detail="TTS audio file not found")
+
+# ----------------- Legacy STT and TTS Endpoints -----------------
 @app.post("/stt")
-async def speech_to_text(
-    file: UploadFile = File(..., alias="audio"),
-    webrtc_id: str = Form(None)
-):
-    """
-    Process the uploaded audio file for speech-to-text.
-    Pass the sample rate as a positional argument (48000 Hz) to match the audio header.
-    """
-    temp_path = f"temp_{uuid.uuid4()}.wav"
+async def speech_to_text(file: UploadFile = File(..., alias="audio"), webrtc_id: str = Form(None)):
+    temp_path = os.path.join(OUTPUT_DIR, f"temp_{uuid.uuid4()}.wav")
     with open(temp_path, "wb") as f:
         f.write(await file.read())
     try:
         transcript = await transcribe_audio(temp_path, 48000)
         return {"transcript": transcript}
     finally:
-        os.remove(temp_path)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 @app.post("/tts")
 async def text_to_speech(data: dict):
@@ -109,102 +182,28 @@ async def text_to_speech(data: dict):
         return JSONResponse(status_code=400, content={"error": "Missing 'text'"})
     output_path = os.path.join(OUTPUT_DIR, f"tts_{uuid.uuid4()}.wav")
     await generate_audio_google(text, output_path)
-    return FileResponse(output_path, media_type="audio/wav")
+    return FileResponse(output_path, media_type="audio/wav", filename="tts_output.wav")
 
-import os
-import uuid
-import subprocess
-from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import JSONResponse
-
-# Assume these are defined/imported as needed:
-# OUTPUT_DIR, TASKS_STATUS, and the asynchronous transcribe_audio() function
-
-app = FastAPI()
-
-@app.post("/generate/transcript")
-async def generate_transcript(file: UploadFile = File(..., alias="audio")):
-    task_id = str(uuid.uuid4())
-    
-    # Save the incoming file with its original extension (if available)
-    original_ext = os.path.splitext(file.filename)[1] or ".wav"
-    temp_input_path = os.path.join(OUTPUT_DIR, f"{task_id}_input{original_ext}")
-    with open(temp_input_path, "wb") as f:
-        f.write(await file.read())
-    
-    # Convert the audio file to a Google-compatible WAV file:
-    # Linear16 encoding, 48000 Hz sample rate, mono channel.
-    converted_path = os.path.join(OUTPUT_DIR, f"{task_id}_converted.wav")
-    try:
-        subprocess.run([
-            "ffmpeg", "-y",              # Overwrite output if exists
-            "-i", temp_input_path,         # Input file
-            "-ar", "48000",                # Set sample rate to 48000 Hz
-            "-ac", "1",                    # Set to mono audio
-            "-f", "wav",                   # Force WAV output format
-            converted_path                 # Output file
-        ], check=True)
-    except Exception as e:
-        # Clean up and return an error if conversion fails
-        if os.path.exists(temp_input_path):
-            os.remove(temp_input_path)
-        return JSONResponse({"task_id": task_id, "transcript": f"Error converting file: {e}"})
-    
-    try:
-        # Call your transcription function with the converted file.
-        transcript = await transcribe_audio(converted_path, 48000)
-        TASKS_STATUS[task_id] = "transcript_generated"
-        return JSONResponse({"task_id": task_id, "transcript": transcript})
-    finally:
-        # Clean up temporary files.
-        if os.path.exists(temp_input_path):
-            os.remove(temp_input_path)
-        if os.path.exists(converted_path):
-            os.remove(converted_path)
-
-# ----------------- Dummy STT Acknowledgment Endpoint -----------------
 @app.post("/stt_ack")
-async def stt_ack(
-    file: UploadFile = File(..., alias="audio"),
-    webrtc_id: str = Form(None)
-):
-    """
-    Dummy endpoint to acknowledge reception of an STT file.
-    It does not process the file; it only returns a confirmation message.
-    """
+async def stt_ack(file: UploadFile = File(..., alias="audio"), webrtc_id: str = Form(None)):
     return JSONResponse({"message": "STT received"}, status_code=200)
 
-# ----------------- Debug Echo Response Endpoint -----------------
 @app.post("/debug_response")
-async def debug_response(
-    file: UploadFile = File(..., alias="audio"),
-    webrtc_id: str = Form(None)
-):
-    """
-    Debug endpoint to simulate a response from the LLM after transcript and TTS.
-    For debugging, it simply echoes back the same audio file that was received.
-    """
-    temp_path = f"debug_{uuid.uuid4()}.wav"
+async def debug_response(file: UploadFile = File(..., alias="audio"), webrtc_id: str = Form(None)):
+    temp_path = os.path.join(OUTPUT_DIR, f"debug_{uuid.uuid4()}.wav")
     with open(temp_path, "wb") as f:
         f.write(await file.read())
-    
-    # Schedule removal of the temporary file after sending the response.
+    from fastapi import BackgroundTasks
     background_tasks = BackgroundTasks()
     background_tasks.add_task(os.remove, temp_path)
-    
-    return FileResponse(
-        temp_path,
-        media_type=file.content_type,
-        filename=file.filename,
-        background=background_tasks
-    )
+    return FileResponse(temp_path, media_type="audio/wav", filename=os.path.basename(temp_path), background=background_tasks)
 
-# --- Health check route ---
+# ----------------- Health Check Endpoint -----------------
 @app.get("/healthz")
 def health():
     return JSONResponse({"status": "OK"})
 
-# --- Run the server on port 9001 ---
+# ----------------- Main -----------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=9001)

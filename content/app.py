@@ -25,7 +25,7 @@ container_health = {
 }
 
 HEALTH_ENDPOINTS = {
-    "frontend":  "http://frontend:80/healthz",   # Using port 80 for frontend
+    "frontend":  "http://frontend:80/healthz",
     "backend":   "http://backend:5000/healthz",
     "mediagen":  "http://mediagen:9001/healthz",
     "llm":       "http://container_llm:9000/healthz"
@@ -54,26 +54,26 @@ threading.Thread(target=health_check_loop, daemon=True).start()
 def healthz():
     return jsonify({"status": "OK"}), 200
 
+# ------------------------------------------------------------------------------
+# 3) HOME PAGE 
+# ------------------------------------------------------------------------------
 @app.route("/")
 def home():
     return render_template("index.html")
 
 # ------------------------------------------------------------------------------
-# 3) AUDIO PROXY & DEBUG ENDPOINTS
+# 4) AUDIO PROXY & DEBUG ENDPOINTS (unchanged)
 # ------------------------------------------------------------------------------
 @app.route("/input_hook", methods=["POST"])
 def input_hook():
     """
-    Receives audio from the browser (FormData with 'audio' and 'webrtc_id')
-    and forwards it to the MediaGen container for transcript processing.
-    Note: Instead of posting to /stt, we now forward to /generate/transcript.
+    Receives audio from the browser and forwards it to the MediaGen container for transcript processing.
     """
     user_audio = request.files.get("audio")
     webrtc_id = request.form.get("webrtc_id", "no_id_provided")
     if not user_audio:
         return jsonify({"error": "No audio file provided"}), 400
 
-    # Forward to the mediagen container's /generate/transcript endpoint.
     forward_url = "http://mediagen:9001/generate/transcript"
     files = {
         "audio": (user_audio.filename, user_audio.stream, user_audio.mimetype)
@@ -88,44 +88,15 @@ def input_hook():
 
     return jsonify(response.json())
 
-@app.route("/debug_response", methods=["POST"])
-def debug_response():
-    """
-    Dummy endpoint to simulate a response from the LLM.
-    It echoes back the same audio file received from the user.
-    """
-    user_audio = request.files.get("audio")
-    if not user_audio:
-        return jsonify({"error": "No audio file provided"}), 400
-
-    file_data = user_audio.read()
-    print("Received audio file of size:", len(file_data))
-    user_audio.stream = BytesIO(file_data)  # Reset stream
-
-    task_id = str(uuid.uuid4())
-    temp_path = os.path.join(OUTPUT_DIR, f"debug_{task_id}.wav")
-    user_audio.save(temp_path)
-    return send_file(
-        temp_path,
-        mimetype=user_audio.mimetype,
-        as_attachment=True,
-        download_name=user_audio.filename
-    )
 
 @app.route("/outputs")
 def outputs():
-    """
-    SSE endpoint that streams output events to the client.
-    For debugging, it simulates:
-      1. A "play" event with an audio URL and a message.
-      2. After a delay, a "record" event instructing the UI to switch back to recording mode.
-    """
     webrtc_id = request.args.get("webrtc_id", "no_id_provided")
     def event_stream():
         time.sleep(3)
         play_event = {
             "action": "play",
-            "audio_url": "/download/debug_audio.wav",  # Adjust this URL as needed.
+            "audio_url": "/download/debug_audio.wav",
             "message": "Audio playback started. Please listen."
         }
         yield f"data: {json.dumps(play_event)}\n\n"
@@ -139,7 +110,7 @@ def outputs():
     return Response(event_stream(), mimetype="text/event-stream")
 
 # ------------------------------------------------------------------------------
-# 4) KEEPALIVE & HEALTH SCORE ENDPOINTS
+# 5) KEEPALIVE & HEALTH SCORE ENDPOINTS
 # ------------------------------------------------------------------------------
 @app.route("/keepalive")
 def keepalive():
@@ -165,7 +136,7 @@ def are_all_healthy():
     })
 
 # ------------------------------------------------------------------------------
-# 5) OTHER AUDIO/TRANSCRIPT ENDPOINTS
+# 6) OTHER AUDIO/TRANSCRIPT ENDPOINTS (unchanged)
 # ------------------------------------------------------------------------------
 @app.route("/generate/audio", methods=["POST"])
 def generate_audio_endpoint():
@@ -212,10 +183,6 @@ def cleanup(task_id: str):
 
 @app.route("/stt", methods=["POST"])
 def speech_to_text():
-    """
-    This endpoint is kept for backward compatibility.
-    It returns a dummy transcript.
-    """
     file = request.files.get("audio")
     webrtc_id = request.form.get("webrtc_id", "no_id_provided")
     if not file:
@@ -252,7 +219,7 @@ def generate_transcript():
         # (This endpoint should perform the actual transcription.)
         with open(temp_path, "rb") as f:
             files = {"audio": (file.filename, f, file.mimetype)}
-            data = {"webrtc_id": "dummy"}  # Adjust or pass a real ID if needed.
+            data = {"webrtc_id": "dummy"}
             response = requests.post("http://mediagen:9001/generate/transcript", files=files, data=data, timeout=30)
             response.raise_for_status()
             transcript_data = response.json()
@@ -262,11 +229,9 @@ def generate_transcript():
     except Exception as e:
         transcript = f"Error: {e}"
     finally:
-        # Remove the temporary audio file.
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-    # Optionally, save the transcript to a file (for logging or debugging).
     transcript_path = os.path.join(OUTPUT_DIR, f"{task_id}_transcript.txt")
     with open(transcript_path, "w", encoding="utf-8") as f:
         f.write(transcript)
@@ -280,6 +245,25 @@ def stt_ack():
     if not file:
         return jsonify({"error": "No audio file provided"}), 400
     return jsonify({"message": "STT received"})
+
+@app.route("/debug_response", methods=["POST"])
+def debug_response():
+    user_audio = request.files.get("audio")
+    if not user_audio:
+        return jsonify({"error": "No audio file provided"}), 400
+    file_data = user_audio.read()
+    print("Received audio file of size:", len(file_data))
+    user_audio.stream = BytesIO(file_data)  # Reset stream
+    task_id = str(uuid.uuid4())
+    temp_path = os.path.join(OUTPUT_DIR, f"debug_{task_id}.wav")
+    user_audio.save(temp_path)
+    return send_file(
+        temp_path,
+        mimetype=user_audio.mimetype,
+        as_attachment=True,
+        download_name=user_audio.filename
+    )
+
 
 # ------------------------------------------------------------------------------
 # 6) MAIN

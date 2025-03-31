@@ -31,9 +31,11 @@ services:
   container_llm:
     build: ./container_LLM
     ports:
-      - "5002:9000"
+      - "5002:9000"  
+    command: gunicorn --bind 0.0.0.0:9000 app:app
     networks:
       - mynetwork
+
 
 networks:
   mynetwork:

@@ -9,12 +9,16 @@ RUN apt-get update && \
 # Copy and install dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Increase Hugging Face Hub download timeout to 300 seconds.
+ENV HF_HUB_DOWNLOAD_TIMEOUT=300
 
 # Pre-download models at build time
-RUN python -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('stabilityai/sd-turbo', torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32).to('cpu')"
+RUN python -c "import torch; from diffusers import StableDiffusionPipeline; StableDiffusionPipeline.from_pretrained('stabilityai/sd-turbo', local_files_only=False, torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32).to('cpu')"
 RUN python -c "import torch; model, utils = torch.hub.load('snakers4/silero-models', 'silero_tts', language='en', speaker='v3_en', trust_repo=True); model.apply_tts(text='test', speaker='en_0')"
 
+# Copy the rest of the application code
 COPY . .
 
 RUN mkdir -p generated_media && chmod -R 777 generated_media

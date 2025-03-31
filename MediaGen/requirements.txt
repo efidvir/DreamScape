@@ -26,3 +26,4 @@ google-auth-oauthlib
 google-api-core
 
 cryptography
+httpx

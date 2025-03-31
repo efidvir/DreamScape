@@ -27,3 +27,13 @@ DreamScape is an interactive AI-guided adventure game where your choices shape a
    docker-compose up --build
 
    http://localhost:80
+
+
+
+   ## API:
+   http://localhost:5001/generate/transcript + audio  
+   returns 
+   {
+    "task_id": "12108dca-7ad2-42bd-9a5f-e325b7e8f101",
+    "transcript": "transcript of voice"
+    }

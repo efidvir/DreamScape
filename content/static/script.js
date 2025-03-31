@@ -24,7 +24,7 @@ let analyser;
 let source;
 let animationId;
 let currentMode = null; // "mic" for recording, "transcript" flow after recording
-let waveformColor = "green"; // default: green when recording
+let waveformColor = "green"; // green when recording; purple during TTS playback
 
 // Canvas setup
 const canvas = document.getElementById("waveCanvas");
@@ -45,12 +45,13 @@ function drawWaveform() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.lineWidth = 2;
   ctx.shadowBlur = 20;
-  ctx.shadowColor = waveformColor === "green" 
-    ? "rgba(0,255,0,0.6)" 
-    : "rgba(160,32,240,0.6)";
-  ctx.strokeStyle = waveformColor === "green" 
-    ? "rgba(0,255,0,0.8)" 
-    : "rgba(160,32,240,0.8)";
+  // Use purple for TTS playback, green for mic recording.
+  ctx.shadowColor = waveformColor === "purple" 
+    ? "rgba(160,32,240,0.6)" 
+    : "rgba(0,255,0,0.6)";
+  ctx.strokeStyle = waveformColor === "purple" 
+    ? "rgba(160,32,240,0.8)" 
+    : "rgba(0,255,0,0.8)";
   ctx.beginPath();
   const sliceWidth = canvas.width / analyser.fftSize;
   let x = 0;
@@ -92,43 +93,18 @@ function clearCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-// Popup for transcript display at top left with a container frame
-function showTranscriptPopup(transcript) {
-  let popup = document.getElementById("transcript-popup");
-  if (!popup) {
-    popup = document.createElement("div");
-    popup.id = "transcript-popup";
-    // Styling similar to the reference design
-    popup.style.position = "fixed";
-    popup.style.top = "20px";
-    popup.style.left = "20px";
-    popup.style.backgroundColor = "rgba(0, 0, 0, 0.85)";
-    popup.style.color = "#fff";
-    popup.style.padding = "15px 20px";
-    popup.style.border = "2px solid #fff";
-    popup.style.borderRadius = "8px";
-    popup.style.boxShadow = "0 4px 8px rgba(0, 0, 0, 0.3)";
-    popup.style.zIndex = "9999";
-    popup.style.fontSize = "1.1em";
-    popup.style.maxWidth = "300px";
-    document.body.appendChild(popup);
+// Append a chat bubble into the chat container (#chatMessages)
+function appendChatBubble(sender, text) {
+  const chatContainer = document.getElementById("chatMessages");
+  if (!chatContainer) {
+    console.warn("Chat container not found!");
+    return;
   }
-  popup.textContent = transcript;
-  popup.style.display = "block";
-  popup.style.opacity = "1";
-  // Fade out after 5 seconds
-  setTimeout(() => {
-    popup.style.transition = "opacity 1s ease-out";
-    popup.style.opacity = "0";
-    setTimeout(() => {
-      popup.style.display = "none";
-    }, 1000);
-  }, 5000);
-}
-
-function displayTranscript(transcript) {
-  console.log("Transcript:", transcript);
-  showTranscriptPopup(transcript);
+  const bubble = document.createElement("div");
+  bubble.classList.add("chat-bubble", sender); // "user" or "llm"
+  bubble.textContent = text;
+  chatContainer.appendChild(bubble);
+  chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
 // === Continuous Voice Chat with Silence Detection ===
@@ -142,7 +118,6 @@ let mediaRecorderRTC;
 let micStreamRTC;
 
 async function startFastRTCRecording() {
-  // Request explicit audio constraints to help capture audio correctly
   const stream = await navigator.mediaDevices.getUserMedia({ 
     audio: { sampleRate: 44100, channelCount: 1 } 
   });
@@ -205,8 +180,8 @@ async function sendAudioToFastRTC() {
   formData.append("webrtc_id", webrtcId);
   
   try {
-    // Note: The endpoint is now "/generate/transcript" to receive a proper transcript.
-    const response = await fetch("/generate/transcript", {
+    // Send the recorded audio to /input_hook.
+    const response = await fetch("/input_hook", {
       method: "POST",
       body: formData
     });
@@ -214,11 +189,42 @@ async function sendAudioToFastRTC() {
       throw new Error(`Server error: ${response.statusText}`);
     }
     const data = await response.json();
-    console.log("Transcript received:", data.transcript);
+    console.log("Response received:", data);
+    
+    // Append chat bubbles: one for user transcript, one for LLM response.
+    appendChatBubble("user", data.transcript);
+    appendChatBubble("llm", data.llm_response);
+    
+    // Optionally, display the transcript in a popup.
     displayTranscript(data.transcript);
+    
+    // If a TTS URL is provided, play it.
+    if (data.tts_audio_url) {
+      playTTSAudio(data.tts_audio_url);
+    }
   } catch (e) {
     console.error("Error sending audio for transcript:", e);
   }
+}
+
+// Play TTS audio and trigger purple waveform animation during playback.
+function playTTSAudio(url) {
+  const audio = new Audio(url);
+  waveformColor = "purple"; // Switch to purple during playback
+  
+  audio.addEventListener("ended", () => {
+    waveformColor = "green"; // Revert to green after playback ends
+  });
+  audio.play().catch((e) => {
+    console.error("Error playing TTS audio:", e);
+    waveformColor = "green";
+  });
+}
+
+// Optional: Popup for transcript display.
+function displayTranscript(transcript) {
+  console.log("Transcript:", transcript);
+  // You could implement a popup here if desired.
 }
 
 // === Mic Toggle Control ===
