@@ -1,5 +1,5 @@
-Flask>=2.0
-gunicorn>=20.1.0
-requests>=2.25
-transformers>=4.0
-torch>=1.7
+fastapi
+uvicorn
+transformers
+torch
+gunicorn
