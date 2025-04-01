@@ -131,29 +131,49 @@ async def generate_transcript(file: UploadFile = File(..., alias="audio")):
             llm_resp = await client.post(llm_url, json=llm_payload, timeout=30.0)
             llm_resp.raise_for_status()
             llm_data = llm_resp.json()
-            llm_text = llm_data.get("response", "")
+            # Expected structured fields:
+            user_response = llm_data.get("user_response", "")
+            voice_response = llm_data.get("voice_response", "")
+            stage_decision = llm_data.get("stage_decision", "")
+            video_scene = llm_data.get("video_scene", "")
+            debug_info = llm_data.get("debug_info", "")
     except Exception as e:
-        llm_text = f"Error contacting LLM: {e}"
+        # Log raw response if available
+        raw_llm_response = ""
+        try:
+            raw_llm_response = llm_resp.text
+        except:
+            pass
+        user_response = ""
+        voice_response = f"Error contacting LLM: {e}. Raw response: {raw_llm_response}"
+        stage_decision = ""
+        video_scene = ""
+        debug_info = f"Error contacting LLM: {e}"
     
-    # Log the LLM response for debugging.
-    print("LLM Response:", llm_text)
+    # Log the raw LLM response for debugging.
+    print("LLM Raw Response:", llm_data if 'llm_data' in locals() else voice_response)
     
-    # Generate TTS audio for the LLM response
+    # Generate TTS audio using the voice_response.
     tts_path = os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav")
     try:
-        await generate_audio_google(llm_text, tts_path)
+        await generate_audio_google(str(voice_response), tts_path)
     except Exception as e:
         tts_path = None
-        llm_text += f" [TTS generation error: {e}]"
+        voice_response += f" [TTS generation error: {e}]"
     
-    # Return combined response (with the LLM response)
+    # Return a combined response with separated fields.
     response_payload = {
         "task_id": task_id,
         "transcript": transcript,
-        "llm_response": llm_text,
+        "llm_user_response": user_response,
+        "llm_voice_response": voice_response,
+        "llm_stage_decision": stage_decision,
+        "llm_video_scene": video_scene,
+        "debug_info": debug_info,
         "tts_audio_url": f"/download/tts/{task_id}" if tts_path and os.path.exists(tts_path) else ""
     }
     return JSONResponse(response_payload)
+
 
 @app.get("/download/tts/{task_id}")
 def get_tts_audio(task_id: str):

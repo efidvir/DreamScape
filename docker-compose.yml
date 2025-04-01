@@ -3,8 +3,8 @@ services:
     build: ./content
     ports:
       - "80:80"
-    depends_on:
-      - backend
+    #depends_on:
+    #  - backend
     networks:
       - mynetwork
 
@@ -12,9 +12,9 @@ services:
     build: ./backend
     ports:
       - "5000:5000"
-    depends_on:
-      - mediagen
-      - container_llm
+    #depends_on:
+    #  - mediagen
+    #  - container_llm
     networks:
       - mynetwork
     environment:
@@ -29,13 +29,13 @@ services:
       - mynetwork
 
   container_llm:
-    build: ./container_LLM
+    build: ./container_LLm
     ports:
-      - "5002:9000"  
-    command: gunicorn --bind 0.0.0.0:9000 app:app
+      - "5002:9000"
+    command: gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:9000 app:app
+    runtime: nvidia    
     networks:
       - mynetwork
-
 
 networks:
   mynetwork:

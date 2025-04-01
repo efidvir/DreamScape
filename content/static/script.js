@@ -193,7 +193,7 @@ async function sendAudioToFastRTC() {
     
     // Append chat bubbles: one for user transcript, one for LLM response.
     appendChatBubble("user", data.transcript);
-    appendChatBubble("llm", data.llm_response);
+    appendChatBubble("llm", data.llm_user_response);
     
     // Optionally, display the transcript in a popup.
     displayTranscript(data.transcript);

@@ -62,12 +62,14 @@ def home():
     return render_template("index.html")
 
 # ------------------------------------------------------------------------------
-# 4) AUDIO PROXY & DEBUG ENDPOINTS (unchanged)
+# 4) AUDIO PROXY & DEBUG ENDPOINTS 
 # ------------------------------------------------------------------------------
 @app.route("/input_hook", methods=["POST"])
 def input_hook():
     """
     Receives audio from the browser and forwards it to the MediaGen container for transcript processing.
+    Expects the MediaGen response in a structured JSON format (with keys such as "transcript", "llm_user_response", etc.).
+    If the expected fields are missing, returns an error asking the user to re-upload the files.
     """
     user_audio = request.files.get("audio")
     webrtc_id = request.form.get("webrtc_id", "no_id_provided")
@@ -83,11 +85,18 @@ def input_hook():
     try:
         response = requests.post(forward_url, files=files, data=data, timeout=30)
         response.raise_for_status()
+        resp_json = response.json()
     except requests.RequestException as e:
         return jsonify({"error": f"MediaGen service error: {e}"}), 500
 
-    return jsonify(response.json())
+    # Check if the response has the expected keys.
+    if not resp_json or "transcript" not in resp_json or "llm_user_response" not in resp_json:
+        return jsonify({
+            "error": "Response from MediaGen is incomplete or expired. Please re-upload your audio file."
+        }), 400
 
+    # Return the JSON response as-is.
+    return jsonify(resp_json)
 
 @app.route("/outputs")
 def outputs():
