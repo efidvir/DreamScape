@@ -1,0 +1,10 @@
+{
+    "stage_0": {
+      "instructions": "You are in darkness, and you don't remember your past. Ask questions to learn more about yourself.",
+      "missing_details": ["your name", "your location"]
+    },
+    "stage_1": {
+      "instructions": "Now that you know your name, discover your purpose. Ask questions about your surroundings.",
+      "missing_details": ["your purpose", "a clue about your past"]
+    }
+  }

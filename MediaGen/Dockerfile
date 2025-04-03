@@ -24,3 +24,4 @@ COPY . .
 RUN mkdir -p generated_media && chmod -R 777 generated_media
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "9001"]
+
