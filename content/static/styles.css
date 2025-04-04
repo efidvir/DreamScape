@@ -11,10 +11,40 @@ html, body {
   font-family: sans-serif;
 }
 
+/* ------------------------------
+   Video background container
+------------------------------ */
+.video-container.background-container {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  background-color: #000;
+  overflow: hidden;
+}
+
+.scene-video {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  min-width: 100%;
+  min-height: 100%;
+  width: auto;
+  height: auto;
+  transform: translate(-50%, -50%);
+  opacity: 0.7; /* Semi-transparent to ensure text is readable */
+}
+
+/* ------------------------------
+   Pattern and swirl background
+------------------------------ */
 .pattern {
   position: relative;
   width: 100%;
   height: 100%;
+  z-index: 1; /* Above video background */
 }
 
 .container {
@@ -126,12 +156,15 @@ html, body {
   padding: 1rem;
 }
 
-.video-container {
+/* Original video container (not the background one) */
+.content .video-container {
   width: 80%;
   max-width: 700px;
+  position: relative; /* Override fixed position */
+  z-index: 2; /* Above background video */
 }
 
-.video-container video {
+.content .video-container video {
   width: 100%;
   border: 2px solid #fff;
   border-radius: 8px;
@@ -143,6 +176,7 @@ html, body {
   flex-wrap: wrap;
   gap: 1rem;
   justify-content: center;
+  z-index: 5; /* Ensure controls are above the video */
 }
 
 /* Microphone toggle component styling */
@@ -233,6 +267,44 @@ html, body {
   border-radius: 50%;
   background-color: gray; /* default unknown */
   border: 2px solid #333;
+}
+
+/* ------------------------------
+   Chat container styling
+------------------------------ */
+#chatContainer {
+  position: fixed;
+  top: 20px;
+  left: 20px;
+  width: 90%;
+  max-width: 600px;
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 15px;
+  z-index: 1000;
+  max-height: 40vh;
+  overflow-y: auto;
+  font-family: Arial, sans-serif;
+}
+
+.chat-bubble {
+  margin: 8px 0;
+  padding: 10px;
+  border-radius: 8px;
+  word-wrap: break-word;
+}
+
+.user {
+  background-color: #e0f7fa;
+  color: #006064;
+  text-align: left;
+}
+
+.llm {
+  background-color: #263238;
+  color: #eceff1;
+  text-align: right;
 }
 
 /* Fade-out effect for chat messages */

@@ -1,3 +1,4 @@
+# docker-compose.yml
 services:
   frontend:
     build: ./content
@@ -25,17 +26,38 @@ services:
     build: ./MediaGen
     ports:
       - "5001:9001"
+    volumes:
+      - ./model_cache:/app/model_cache  
+    runtime: nvidia  
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
     networks:
       - mynetwork
 
   container_llm:
-    build: ./container_LLm
+    build: ./container_LLM
     ports:
       - "5002:9000"
-    command: gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:9000 app:app
-    runtime: nvidia    
+    runtime: nvidia
+    deploy:
+      resources:
+        limits:
+          memory: 16G  
+          cpus: '4'    
+        reservations:
+          memory: 8G
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - TRANSFORMERS_CACHE=/model_cache
+      - HF_HOME=/model_cache
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
+    volumes:
+      - ./model_cache:/model_cache  
+      - ./offload:/offload         
     networks:
       - mynetwork
+    restart: unless-stopped
 
 networks:
   mynetwork:
+    driver: bridge

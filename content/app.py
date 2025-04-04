@@ -273,6 +273,34 @@ def debug_response():
         download_name=user_audio.filename
     )
 
+@app.route('/mediagen/video_status/<task_id>')
+def proxy_video_status(task_id):
+    """Proxy endpoint to check video generation status in MediaGen."""
+    try:
+        response = requests.get(f"http://mediagen:9001/video_status/{task_id}", timeout=5)
+        return jsonify(response.json()), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e), "status": "error"}), 500
+
+@app.route('/get/visual/<task_id>')
+def proxy_visual(task_id):
+    """Proxy endpoint to get video from MediaGen."""
+    try:
+        # Forward the request to MediaGen
+        response = requests.get(f"http://mediagen:9001/get/visual/{task_id}", stream=True)
+        
+        # If the video exists, stream it back to the client
+        if response.status_code == 200:
+            return Response(
+                response.iter_content(chunk_size=1024),
+                content_type=response.headers['Content-Type'],
+                status=response.status_code
+            )
+        else:
+            return jsonify({"error": "Video not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # ------------------------------------------------------------------------------
 # 6) MAIN

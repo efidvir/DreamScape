@@ -5,10 +5,7 @@
   <title>AI Interaction</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   <style>
-    /* Preserve original design; add chat container styling */
-    /* Original chat container styling (if any) is overridden below */
-
-    /* NEW: Chat container positioned at the top left, no white frame */
+    /* Chat container specific styles */
     #chatContainer {
       position: fixed;
       top: 20px !important;
@@ -50,6 +47,13 @@
   </style>
 </head>
 <body>
+  <!-- Background video container for scene visualization -->
+  <div class="video-container background-container">
+    <video id="scene-video" class="scene-video" loop muted autoplay playsinline>
+      <!-- Video source will be added dynamically by video-manager.js -->
+    </video>
+  </div>
+
   <div class="pattern">
     <div class="container"></div>
 
@@ -91,7 +95,9 @@
     <div id="chatMessages"></div>
   </div>
   
+  <!-- Load scripts -->
   <script src="{{ url_for('static', filename='script.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/video-manager.js') }}"></script>
   
   <!-- Script to fade out and remove older messages, keeping only the last 2 -->
   <script>
@@ -131,3 +137,5 @@
       observer.observe(chatMessages, { childList: true });
     });
   </script>
+</body>
+</html>

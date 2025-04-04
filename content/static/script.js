@@ -279,3 +279,12 @@ function updateCircleColor(circleId, status) {
     circle.style.backgroundColor = "gray";
   }
 }
+
+function processExistingResponseFunction(data) {
+  // Your existing code to process the response
+  
+  // Add this at the end to notify the video manager
+  if (window.handleNewConversationResponse) {
+      window.handleNewConversationResponse(data);
+  }
+}
