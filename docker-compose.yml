@@ -1,44 +1,67 @@
 # docker-compose.yml
+version: '3.8'
+
 services:
   frontend:
     build: ./content
     ports:
       - "80:80"
-    #depends_on:
-    #  - backend
+    volumes:
+      - ./generated_media:/app/static/media:rw
     networks:
       - mynetwork
+    depends_on:
+      - init
+      #- backend
 
   backend:
     build: ./backend
     ports:
       - "5000:5000"
-    #depends_on:
-    #  - mediagen
-    #  - container_llm
+    volumes:
+      - ./generated_media:/app/static/media:rw
     networks:
       - mynetwork
     environment:
       - MEDIA_GEN_URL=http://mediagen:9001
       - LLM_URL=http://container_llm:9000
+    depends_on:
+      - init
+      #- mediagen
+      #- container_llm
 
   mediagen:
-    build: ./MediaGen
+    build: 
+      context: ./MediaGen
+      dockerfile: Dockerfile
     ports:
       - "5001:9001"
     volumes:
-      - ./model_cache:/app/model_cache  
-    runtime: nvidia  
+      - ./model_cache:/app/model_cache:rw
+      - ./generated_media:/app/generated_media:rw
+      - ./generated_media:/app/static/media:rw
+    runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - OUTPUT_DIR=/app/generated_media
     networks:
       - mynetwork
+    depends_on:
+      - init
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
   container_llm:
     build: ./container_LLM
     ports:
       - "5002:9000"
     runtime: nvidia
+    volumes:
+      - ./model_cache:/model_cache:rw
     deploy:
       resources:
         limits:
@@ -50,14 +73,27 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - TRANSFORMERS_CACHE=/model_cache
       - HF_HOME=/model_cache
-      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:128
-    volumes:
-      - ./model_cache:/model_cache  
-      - ./offload:/offload         
     networks:
       - mynetwork
-    restart: unless-stopped
+    depends_on:
+      - init
+
+  init:
+    image: alpine
+    command: >
+      sh -c "mkdir -p /data/generated_media /data/model_cache && 
+             chmod -R 777 /data/generated_media /data/model_cache && 
+             echo 'Directories initialized with proper permissions'"
+    volumes:
+      - ./:/data
+    restart: "no"
+    networks:
+      - mynetwork
 
 networks:
   mynetwork:
     driver: bridge
+
+volumes:
+  model_cache:
+  generated_media:

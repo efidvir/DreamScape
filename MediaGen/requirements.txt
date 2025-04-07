@@ -1,34 +1,25 @@
-# Core dependencies
-torch
+# requirements.txt
+# Core ML dependencies are installed separately in the Dockerfile
+
+# Media generation
 diffusers
 transformers
 accelerate
 omegaconf
-
-# Media processing
 opencv-python-headless
-Pillow
-scipy
 soundfile
 ffmpeg-python
 
-# Web server
-fastapi
-uvicorn
-requests
-python-multipart
+# TTS
+TTS
+pydub
 
-# Google Cloud APIs
+# Google Cloud dependencies
 google-cloud-speech
-google-cloud-texttospeech
 google-auth
 google-auth-oauthlib
 google-api-core
 
-cryptography
-httpx
-
+# Other dependencies
 safetensors==0.4.1
-numpy==1.24.3
-opencv-python==4.8.1.78
 grpcio

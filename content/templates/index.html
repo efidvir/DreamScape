@@ -44,15 +44,174 @@
       opacity: 0;
       transition: opacity 0.5s ease-out;
     }
+    
+    /* Video background styling - enhanced for fullscreen with transparency */
+    .scene-video {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: -1000;
+      opacity: 0.5; /* 50% transparency */
+      background-size: cover;
+    }
+    
+    /* Ensure the video container takes full screen */
+    .background-container {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: -1001;
+      overflow: hidden;
+    }
+    
+    /* Hide audio player */
+    #tts-audio-player {
+      position: absolute;
+      left: -9999px;
+    }
+
+    /* Debug panel */
+    #debug-panel {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      padding: 10px;
+      border-radius: 5px;
+      font-family: monospace;
+      z-index: 9999;
+      max-width: 600px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-size: 12px;
+    }
+    
+    .debug-status {
+      margin: 5px 0;
+    }
+    
+    .waiting {
+      color: orange;
+    }
+    
+    .success {
+      color: lime;
+    }
+    
+    .error {
+      color: red;
+    }
+    
+    /* TTS settings panel */
+    .settings-panel {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      padding: 15px;
+      border-radius: 8px;
+      z-index: 1000;
+      width: 250px;
+      font-family: Arial, sans-serif;
+    }
+    
+    .settings-panel h3 {
+      margin-top: 0;
+      margin-bottom: 15px;
+      color: #4fc3f7;
+      font-size: 16px;
+    }
+    
+    .form-group {
+      margin-bottom: 15px;
+    }
+    
+    .form-group label {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+    }
+    
+    .form-control {
+      width: 100%;
+      padding: 8px;
+      border-radius: 4px;
+      border: none;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+    }
+    
+    #voice-selector {
+      width: 100%;
+      padding: 8px;
+      border-radius: 4px;
+      border: none;
+      background: rgba(255, 255, 255, 0.2);
+      color: white;
+      font-size: 13px;
+    }
+    
+    #voice-selector option,
+    #voice-selector optgroup {
+      background: #333;
+      color: white;
+    }
+    
+    .speed-display {
+      display: inline-block;
+      width: 30px;
+      text-align: center;
+      margin-left: 5px;
+    }
+    
+    /* Toggle for showing/hiding settings */
+    .settings-toggle {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      background: rgba(0, 0, 0, 0.5);
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      font-size: 20px;
+      cursor: pointer;
+      z-index: 1001;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    /* Hide settings by default on mobile */
+    @media (max-width: 768px) {
+      .settings-panel {
+        display: none;
+      }
+      
+      .settings-panel.visible {
+        display: block;
+      }
+    }
   </style>
 </head>
 <body>
-  <!-- Background video container for scene visualization -->
+  <!-- Background video container for scene visualization - updated for fullscreen looping with transparency -->
   <div class="video-container background-container">
     <video id="scene-video" class="scene-video" loop muted autoplay playsinline>
-      <!-- Video source will be added dynamically by video-manager.js -->
+      <!-- Video source will be added dynamically by JS -->
     </video>
   </div>
+  
+  <!-- Hidden audio player for TTS -->
+  <audio id="tts-audio-player"></audio>
 
   <div class="pattern">
     <div class="container"></div>
@@ -81,6 +240,37 @@
     </div>
   </div>
   
+  <!-- Settings toggle button (only appears on mobile) -->
+  <button class="settings-toggle" id="settings-toggle">⚙️</button>
+  
+  <!-- TTS Voice Settings Panel -->
+  <div class="settings-panel" id="settings-panel">
+    <h3>Voice Settings</h3>
+    <div class="form-group">
+      <label for="voice-selector">Select Voice:</label>
+      <select id="voice-selector" class="form-control">
+        <option value="">Default voice</option>
+        <!-- Voice options will be populated dynamically -->
+      </select>
+    </div>
+    
+    <div class="form-group">
+      <label for="speed-control">
+        Speech Rate: <span id="speed-value">1.0</span>x
+      </label>
+      <input type="range" id="speed-control" min="0.5" max="2.0" step="0.1" 
+             value="1.0" class="form-control">
+    </div>
+  </div>
+  
+  <!-- Debug panel to show media status -->
+  <div id="debug-panel">
+    <h3>Media Status</h3>
+    <div id="task-id-status" class="debug-status">Task ID: None</div>
+    <div id="video-status" class="debug-status">Video: Not checking</div>
+    <div id="audio-status" class="debug-status">Audio: Not checking</div>
+  </div>
+  
   <canvas id="waveCanvas"></canvas>
   
   <div id="healthStatusContainer">
@@ -97,7 +287,7 @@
   
   <!-- Load scripts -->
   <script src="{{ url_for('static', filename='script.js') }}"></script>
-  <script src="{{ url_for('static', filename='js/video-manager.js') }}"></script>
+  <script src="{{ url_for('static', filename='video-manager.js') }}"></script>
   
   <!-- Script to fade out and remove older messages, keeping only the last 2 -->
   <script>
@@ -135,6 +325,376 @@
       });
   
       observer.observe(chatMessages, { childList: true });
+      
+      // Make sure the scene video has no controls
+      const sceneVideo = document.getElementById('scene-video');
+      if (sceneVideo) {
+        sceneVideo.controls = false;
+      }
+      
+      // Ensure our existing code properly forwards responses to the video manager
+      if (window.processExistingResponseFunction) {
+        const originalFn = window.processExistingResponseFunction;
+        window.processExistingResponseFunction = function(data) {
+          // Call the original function
+          originalFn(data);
+          
+          // Also notify the video manager
+          if (window.handleNewConversationResponse) {
+            window.handleNewConversationResponse(data);
+          }
+        };
+      }
+      
+      // Set up the settings panel toggle for mobile
+      const settingsToggle = document.getElementById('settings-toggle');
+      const settingsPanel = document.getElementById('settings-panel');
+      
+      if (settingsToggle && settingsPanel) {
+        settingsToggle.addEventListener('click', function() {
+          settingsPanel.classList.toggle('visible');
+        });
+      }
+      
+      // Update speech rate display when the slider changes
+      const speedControl = document.getElementById('speed-control');
+      const speedValue = document.getElementById('speed-value');
+      
+      if (speedControl && speedValue) {
+        speedControl.addEventListener('input', function() {
+          speedValue.textContent = parseFloat(this.value).toFixed(1);
+        });
+      }
+    });
+  </script>
+
+  <!-- Media polling and playback script - consolidated version with debug prints -->
+  <script>
+    // Track state
+    let currentTaskId = null;
+    let isCheckingVideo = false;
+    let isCheckingAudio = false;
+    let videoFound = false;
+    let audioFound = false;
+    
+    // Constants
+    const MAX_ATTEMPTS = 60; // 2 minutes at 2 second intervals
+    const CHECK_INTERVAL = 2000; // 2 seconds
+    
+    // Keep track of attempts
+    let videoAttempts = 0;
+    let audioAttempts = 0;
+    
+    // Debug function to update status displays
+    function updateDebugStatus() {
+      // Update task ID status
+      const taskIdStatus = document.getElementById('task-id-status');
+      if (taskIdStatus) {
+        taskIdStatus.textContent = `Task ID: ${currentTaskId || 'None'}`;
+      }
+      
+      // Update video status
+      const videoStatus = document.getElementById('video-status');
+      if (videoStatus) {
+        let statusText = 'Video: ';
+        if (!isCheckingVideo) {
+          statusText += 'Not checking';
+        } else if (videoFound) {
+          statusText += `✅ FOUND and PLAYING (after ${videoAttempts} attempts)`;
+          videoStatus.className = 'debug-status success';
+        } else {
+          statusText += `⏳ WAITING FOR VIDEO... (attempt ${videoAttempts}/${MAX_ATTEMPTS})`;
+          videoStatus.className = 'debug-status waiting';
+        }
+        videoStatus.textContent = statusText;
+      }
+      
+      // Update audio status
+      const audioStatus = document.getElementById('audio-status');
+      if (audioStatus) {
+        let statusText = 'Audio: ';
+        if (!isCheckingAudio) {
+          statusText += 'Not checking';
+        } else if (audioFound) {
+          statusText += `✅ FOUND and PLAYING (after ${audioAttempts} attempts)`;
+          audioStatus.className = 'debug-status success';
+        } else {
+          statusText += `⏳ WAITING FOR AUDIO... (attempt ${audioAttempts}/${MAX_ATTEMPTS})`;
+          audioStatus.className = 'debug-status waiting';
+        }
+        audioStatus.textContent = statusText;
+      }
+    }
+    
+    // Function to start media polling for a task
+    function startMediaPolling(taskId) {
+      if (!taskId) return;
+      
+      console.log(`🔍 Starting media polling for task ID: ${taskId}`);
+      currentTaskId = taskId;
+      
+      // Reset state
+      videoAttempts = 0;
+      audioAttempts = 0;
+      videoFound = false;
+      audioFound = false;
+      
+      // Update debug display
+      updateDebugStatus();
+      
+      // Start checking for video
+      if (!isCheckingVideo) {
+        console.log(`▶️ Starting VIDEO polling for task: ${taskId}`);
+        isCheckingVideo = true;
+        checkForVideo(taskId);
+      }
+      
+      // Start checking for audio with a slight delay
+      if (!isCheckingAudio) {
+        setTimeout(() => {
+          console.log(`🔊 Starting AUDIO polling for task: ${taskId}`);
+          isCheckingAudio = true;
+          checkForAudio(taskId);
+        }, 1000);
+      }
+    }
+    
+    // Function to check for video
+    function checkForVideo(taskId) {
+      if (videoFound || videoAttempts >= MAX_ATTEMPTS) {
+        if (!videoFound) {
+          console.log(`❌ VIDEO NOT FOUND after ${MAX_ATTEMPTS} attempts for task: ${taskId}`);
+          document.getElementById('video-status').className = 'debug-status error';
+          document.getElementById('video-status').textContent = `Video: ❌ NOT FOUND after ${MAX_ATTEMPTS} attempts`;
+        }
+        isCheckingVideo = false;
+        return;
+      }
+      
+      videoAttempts++;
+      console.log(`📺 Checking for VIDEO (attempt ${videoAttempts}/${MAX_ATTEMPTS}): ${taskId}`);
+      updateDebugStatus();
+      
+      // Try a direct HEAD request to see if file exists
+      fetch(`/get/visual/${taskId}`, { method: 'HEAD' })
+        .then(response => {
+          if (response.ok) {
+            console.log(`✅ VIDEO FILE EXISTS for task: ${taskId}`);
+            videoFound = true;
+            updateDebugStatus();
+            updateVideoElement(`/get/visual/${taskId}`);
+          } else {
+            console.log(`🔍 VIDEO file not found directly, checking status endpoint for task: ${taskId}`);
+            // If direct check fails, try status endpoint
+            fetch(`/video_status/${taskId}`)
+              .then(response => response.json())
+              .then(data => {
+                console.log(`📊 VIDEO status response for task ${taskId}:`, data);
+                if (data.status === 'completed') {
+                  console.log(`✅ VIDEO IS READY according to status endpoint for task: ${taskId}`);
+                  videoFound = true;
+                  updateDebugStatus();
+                  updateVideoElement(data.video_url || `/get/visual/${taskId}`);
+                } else {
+                  console.log(`⏳ VIDEO not ready yet for task: ${taskId} (status: ${data.status})`);
+                  // Schedule next check
+                  setTimeout(() => checkForVideo(taskId), CHECK_INTERVAL);
+                }
+              })
+              .catch(error => {
+                console.error(`❌ ERROR checking video status for task ${taskId}:`, error);
+                // Schedule next check despite error
+                setTimeout(() => checkForVideo(taskId), CHECK_INTERVAL);
+              });
+          }
+        })
+        .catch(error => {
+          console.error(`❌ ERROR checking video file for task ${taskId}:`, error);
+          // Schedule next check despite error
+          setTimeout(() => checkForVideo(taskId), CHECK_INTERVAL);
+        });
+    }
+    
+    // Function to check for audio
+    function checkForAudio(taskId) {
+      if (audioFound || audioAttempts >= MAX_ATTEMPTS) {
+        if (!audioFound) {
+          console.log(`❌ AUDIO NOT FOUND after ${MAX_ATTEMPTS} attempts for task: ${taskId}`);
+          document.getElementById('audio-status').className = 'debug-status error';
+          document.getElementById('audio-status').textContent = `Audio: ❌ NOT FOUND after ${MAX_ATTEMPTS} attempts`;
+        }
+        isCheckingAudio = false;
+        return;
+      }
+      
+      audioAttempts++;
+      console.log(`🔊 Checking for AUDIO (attempt ${audioAttempts}/${MAX_ATTEMPTS}): ${taskId}`);
+      updateDebugStatus();
+      
+      // Try a direct HEAD request to see if file exists
+      fetch(`/get/audio/${taskId}`, { method: 'HEAD' })
+        .then(response => {
+          if (response.ok) {
+            console.log(`✅ AUDIO FILE EXISTS for task: ${taskId}`);
+            audioFound = true;
+            updateDebugStatus();
+            playAudio(`/get/audio/${taskId}`);
+          } else {
+            console.log(`⏳ AUDIO file not found, will check again for task: ${taskId}`);
+            // Schedule next check
+            setTimeout(() => checkForAudio(taskId), CHECK_INTERVAL);
+          }
+        })
+        .catch(error => {
+          console.error(`❌ ERROR checking audio file for task ${taskId}:`, error);
+          // Schedule next check despite error
+          setTimeout(() => checkForAudio(taskId), CHECK_INTERVAL);
+        });
+    }
+    
+    // Function to update video element
+    function updateVideoElement(url) {
+      const videoElement = document.getElementById('scene-video');
+      if (!videoElement) {
+        console.error('❌ Video element not found');
+        return;
+      }
+      
+      console.log(`🎬 Updating video element with URL: ${url}`);
+      
+      // Add cache buster
+      const cacheBuster = new Date().getTime();
+      const videoUrl = `${url}?cb=${cacheBuster}`;
+      
+      // Set video properties
+      videoElement.src = videoUrl;
+      videoElement.controls = false;
+      videoElement.loop = true;
+      videoElement.muted = true;
+      videoElement.autoplay = true;
+      videoElement.playsinline = true;
+      videoElement.style.opacity = '0.5';
+      
+      // Load the video
+      videoElement.load();
+      
+      // Play when ready
+      videoElement.onloadedmetadata = function() {
+        console.log(`🎬 Video metadata loaded, attempting to play...`);
+        videoElement.play()
+          .then(() => {
+            console.log(`✅ VIDEO PLAYING SUCCESSFULLY`);
+            updateDebugStatus();
+          })
+          .catch(error => {
+            console.error(`❌ Error playing video:`, error);
+            
+            // Try playing on user interaction (for browsers that require it)
+            console.log(`🖱️ Will try to play video on next user interaction`);
+            document.addEventListener('click', () => {
+              videoElement.play()
+                .then(() => {
+                  console.log(`✅ VIDEO PLAYING after user interaction`);
+                  updateDebugStatus();
+                })
+                .catch(e => console.error('❌ Still failed to play video after click:', e));
+            }, { once: true });
+          });
+      };
+    }
+    
+    // Function to play audio
+    function playAudio(url) {
+      let audioElement = document.getElementById('tts-audio-player');
+      if (!audioElement) {
+        audioElement = document.createElement('audio');
+        audioElement.id = 'tts-audio-player';
+        document.body.appendChild(audioElement);
+      }
+      
+      console.log(`🔊 Playing audio from URL: ${url}`);
+      
+      // Add cache buster
+      const cacheBuster = new Date().getTime();
+      const audioUrl = `${url}?cb=${cacheBuster}`;
+      
+      // Set audio source
+      audioElement.src = audioUrl;
+      
+      // Play audio
+      audioElement.play()
+        .then(() => {
+          console.log(`✅ AUDIO PLAYING SUCCESSFULLY`);
+          updateDebugStatus();
+        })
+        .catch(error => {
+          console.error(`❌ Error playing audio:`, error);
+          
+          // Try playing on user interaction (for browsers that require it)
+          console.log(`🖱️ Will try to play audio on next user interaction`);
+          document.addEventListener('click', () => {
+            audioElement.play()
+              .then(() => {
+                console.log(`✅ AUDIO PLAYING after user interaction`);
+                updateDebugStatus();
+              })
+              .catch(e => console.error('❌ Still failed to play audio after click:', e));
+          }, { once: true });
+        });
+    }
+    
+    // Intercept API responses to detect task IDs
+    document.addEventListener('DOMContentLoaded', function() {
+      // Initialize debug display
+      updateDebugStatus();
+      
+      // Save original fetch
+      const originalFetch = window.fetch;
+      
+      // Override fetch
+      window.fetch = function(...args) {
+        return originalFetch.apply(this, args).then(response => {
+          // Only process responses from relevant endpoints
+          const url = typeof args[0] === 'string' ? args[0] : args[0].url;
+          
+          if (url.includes('/input_hook') || url.includes('/generate/transcript')) {
+            console.log(`🔍 Intercepted response from API endpoint: ${url}`);
+            
+            // Clone response to read body
+            const responseClone = response.clone();
+            
+            // Check for JSON responses
+            const contentType = response.headers.get('content-type');
+            if (contentType && contentType.includes('application/json')) {
+              responseClone.json().then(data => {
+                // Check for task ID
+                if (data && data.task_id) {
+                  console.log(`🆔 Task ID detected in response: ${data.task_id}`);
+                  
+                  // Start polling for media
+                  startMediaPolling(data.task_id);
+                }
+              }).catch(err => {
+                // Ignore JSON parsing errors
+                console.error('❌ Error parsing response JSON:', err);
+              });
+            }
+          }
+          
+          return response;
+        });
+      };
+      
+      // Initialize video element properties
+      const videoElement = document.getElementById('scene-video');
+      if (videoElement) {
+        videoElement.controls = false;
+        videoElement.loop = true;
+        videoElement.muted = true;
+        videoElement.autoplay = true;
+        videoElement.playsinline = true;
+        videoElement.style.opacity = '0.5';
+      }
     });
   </script>
 </body>

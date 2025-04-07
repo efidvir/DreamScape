@@ -1,4 +1,4 @@
-# mediagen/media_generation.py
+# MediaGen/media_generation.py
 import os
 import time
 import asyncio
@@ -9,10 +9,12 @@ import cv2
 from PIL import Image, ImageDraw, ImageFont
 import requests
 from io import BytesIO
+from typing import Optional, Dict, Any
+from tts_service import tts_service
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("media_generation")
+logger = logging.getLogger(__name__)
 
 # Set the cache directory
 os.environ["HF_HOME"] = "/app/model_cache"
@@ -437,6 +439,7 @@ def enhance_prompt(scene_description: str) -> str:
 async def generate_audio(prompt: str, output_path: str, **kwargs) -> str:
     """
     Generate audio based on the provided prompt.
+    This is a fallback function that creates a simple audio file.
     
     Args:
         prompt: Text prompt to generate audio from
@@ -446,10 +449,7 @@ async def generate_audio(prompt: str, output_path: str, **kwargs) -> str:
     Returns:
         str: Path to the generated audio file
     """
-    # This is a simple placeholder. In practice, you should use your actual 
-    # audio generation code or call an external API
-    
-    # For now, let's create a simple silence file to avoid errors
+    # This is a simple placeholder that creates a silence file
     import numpy as np
     from scipy.io import wavfile
     
@@ -462,3 +462,68 @@ async def generate_audio(prompt: str, output_path: str, **kwargs) -> str:
     wavfile.write(output_path, sample_rate, samples.astype(np.float32))
     
     return output_path
+
+async def generate_audio_local(
+    text: str, 
+    output_path: str,
+    voice_model: Optional[str] = None,
+    speaker: Optional[str] = None,
+    language: Optional[str] = None,
+    speed: float = 1.0
+) -> str:
+    """
+    Generate audio using local TTS service with various options.
+    
+    Args:
+        text: Text to synthesize
+        output_path: Path where the audio should be saved
+        voice_model: Specific TTS model to use
+        speaker: Speaker ID for multi-speaker models
+        language: Language code for multilingual models
+        speed: Speech rate (1.0 is normal)
+        
+    Returns:
+        str: Path to the generated audio file
+    """
+    try:
+        logger.info(f"Generating audio with local TTS for: '{text[:50]}...'")
+        
+        # Synthesize speech using the local TTS service
+        tts_service.synthesize(
+            text=text,
+            output_path=output_path,
+            voice_model=voice_model,
+            speaker=speaker,
+            language=language,
+            speed=speed
+        )
+        
+        return output_path
+    except Exception as e:
+        logger.error(f"Local TTS generation failed: {e}")
+        raise
+
+async def generate_transcript_from_audio(audio_path: str) -> str:
+    """
+    Generate a transcript from an audio file.
+    This is a placeholder that should be replaced with proper STT functionality.
+    
+    Args:
+        audio_path: Path to the audio file
+        
+    Returns:
+        str: Transcribed text
+    """
+    try:
+        from tts_stt import transcribe_audio
+        
+        # Use the Google Cloud speech-to-text service from tts_stt.py
+        transcript = await transcribe_audio(audio_path)
+        return transcript
+        
+    except ImportError:
+        logger.warning("Could not import transcribe_audio from tts_stt.py")
+        return "Placeholder transcript. Speech-to-text functionality not available."
+    except Exception as e:
+        logger.error(f"Error transcribing audio: {e}")
+        return f"Error transcribing audio: {str(e)}"
