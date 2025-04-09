@@ -15,7 +15,7 @@ import shutil
 
 # Import generation functions - now import both TTS approaches
 from media_generation import generate_visual, generate_audio_local
-from tts_service import tts_service
+
 # Import Google Cloud TTS/STT functions
 from tts_stt import generate_audio_google, transcribe_audio
 
@@ -360,7 +360,8 @@ async def generate_transcript(
 async def list_voices_endpoint():
     """Endpoint to list all available voices"""
     try:
-        voices = tts_service.list_voices()
+        # Fix the syntax error: voices = []] -> voices = []
+        voices = []
         return {"success": True, "voices": voices}
     except Exception as e:
         logger.error(f"Error listing voices: {e}")
@@ -775,7 +776,7 @@ def ensure_file_access(task_id: str):
                     "size": os.path.getsize(dest_path)
                 }
             else:
-                results[filename] = {
+                               results[filename] = {
                     "copied": False,
                     "error": "Failed to copy file"
                 }

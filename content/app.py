@@ -154,7 +154,34 @@ def check_audio_exists(task_id):
         print(f"Error checking audio in MediaGen: {e}")
     
     return jsonify({"exists": False})
+
+# Add the new check_video_exists endpoint similar to check_audio_exists
+@app.route("/check_video_exists/<task_id>")
+def check_video_exists(task_id):
+    """Proxy to MediaGen to check if video file exists"""
+    try:
+        # Forward the request to MediaGen
+        response = requests.get(f"http://mediagen:9001/get/visual/{task_id}", method="HEAD", timeout=2)
+        if response.status_code == 200:
+            return jsonify({
+                "exists": True,
+                "url": f"/get/visual/{task_id}",  # URL to proxy endpoint
+                "size": int(response.headers.get("Content-Length", 0))
+            })
+        else:
+            # Try local file
+            video_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
+            if os.path.exists(video_path):
+                file_size = os.path.getsize(video_path)
+                return jsonify({
+                    "exists": True,
+                    "url": f"/get/visual/{task_id}",
+                    "size": file_size
+                })
+    except Exception as e:
+        print(f"Error checking video in MediaGen: {e}")
     
+    return jsonify({"exists": False})
     
 # ------------------------------------------------------------------------------
 # 5) KEEPALIVE & HEALTH SCORE ENDPOINTS
@@ -372,6 +399,7 @@ def get_visual(task_id: str):
 
 
 # Add this endpoint to content/app.py 
+@app.route('/audio_status/<task_id>')
 def audio_status(task_id):
     """Check if an audio file is ready and provide its URL"""
     # Check multiple paths for local files
@@ -435,7 +463,7 @@ def list_files():
                 files.append({
                     "filename": filename,
                     "size": stats.st_size,
-                    "modified": datetime.fromtimestamp(stats.st_mtime).isoformat(),
+                    "modified": datetime.datetime.fromtimestamp(stats.st_mtime).isoformat(),
                     "is_file": os.path.isfile(file_path)
                 })
             except Exception as e:
@@ -450,50 +478,37 @@ def list_files():
         "files": files
     })   
 
-@app.route('/audio_status/<task_id>')
-def audio_status(task_id):
-    """Check if an audio file is ready and provide its URL"""
-    # Check multiple paths for local files
-    local_paths = [
-        os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav"),
-        os.path.join(OUTPUT_DIR, f"{task_id}_audio.wav")
-    ]
+@app.route('/video_status/<task_id>')
+def video_status(task_id):
+    """Check if a video is ready and provide its URL"""
+    # First check if the file exists locally
+    video_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
+    file_exists = os.path.exists(video_path)
     
-    for path in local_paths:
-        if os.path.exists(path):
-            print(f"Found audio file for {task_id} at {path}")  # Add debug output
-            return jsonify({
-                "task_id": task_id,
-                "status": "completed",
-                "audio_url": f"/get/audio/{task_id}"
-            })
+    if file_exists:
+        return jsonify({
+            "task_id": task_id,
+            "status": "completed",
+            "video_url": f"/get/visual/{task_id}"
+        })
     
     # If not found locally, try checking with MediaGen
     try:
-        response = requests.get(f"http://mediagen:9001/audio_status/{task_id}", timeout=3)
+        response = requests.get(f"http://mediagen:9001/video_status/{task_id}", timeout=3)
         if response.status_code == 200:
             data = response.json()
-            print(f"MediaGen returned audio status: {data}")  # Add debug output
             
-            # If MediaGen says the file is ready, try to copy it to the local OUTPUT_DIR
-            if data.get("status") in ["completed", "audio_completed"] and data.get("file_info", {}).get("exists", False):
-                # Try to fetch the file from MediaGen and save locally
-                try:
-                    audio_response = requests.get(f"http://mediagen:9001/get/audio/{task_id}", timeout=10)
-                    if audio_response.status_code == 200:
-                        local_path = os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav")
-                        with open(local_path, "wb") as f:
-                            f.write(audio_response.content)
-                        print(f"Copied audio from MediaGen to {local_path}")
-                except Exception as e:
-                    print(f"Error copying audio from MediaGen: {e}")
+            # If MediaGen says the file is ready, try to copy it locally
+            if data.get("status") == "completed" and data.get("video_url"):
+                # Try to fetch the video from MediaGen
+                fetch_file_from_mediagen(task_id, "visual")
             
             return jsonify(data)
         else:
             return jsonify({
                 "task_id": task_id, 
                 "status": "generating", 
-                "message": "Audio still being generated"
+                "message": "Video still being generated"
             })
     except Exception as e:
         return jsonify({
@@ -501,6 +516,85 @@ def audio_status(task_id):
             "status": "unknown",
             "error": str(e)
         })
+
+@app.route('/mediagen/video_status/<task_id>')
+def proxy_video_status(task_id):
+    """Proxy endpoint to check video generation status in MediaGen."""
+    try:
+        response = requests.get(f"http://mediagen:9001/video_status/{task_id}", timeout=5)
+        return jsonify(response.json()), response.status_code
+    except Exception as e:
+        return jsonify({"error": str(e), "status": "error"}), 500
+
+@app.route('/get/visual/<task_id>', methods=['HEAD'])
+def head_visual(task_id: str):
+    """HEAD request handler for video files"""
+    # First check local file
+    video_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
+    
+    if os.path.exists(video_path):
+        # Get file stats
+        file_stats = os.stat(video_path)
+        
+        # Create a Response object
+        response = Response("")
+        
+        # Add headers to the response
+        response.headers['Content-Length'] = str(file_stats.st_size)
+        response.headers['Accept-Ranges'] = 'bytes'
+        response.headers['Cache-Control'] = 'public, max-age=3600'
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Content-Type'] = 'video/mp4'
+        
+        return response
+    
+    # If not found locally, check with MediaGen
+    try:
+        response = requests.head(f"http://mediagen:9001/get/visual/{task_id}", timeout=2)
+        if response.status_code == 200:
+            # Forward headers
+            resp = Response("")
+            resp.headers['Content-Length'] = response.headers.get('Content-Length', '0')
+            resp.headers['Accept-Ranges'] = 'bytes'
+            resp.headers['Cache-Control'] = 'public, max-age=3600'
+            resp.headers['Access-Control-Allow-Origin'] = '*'
+            resp.headers['Content-Type'] = 'video/mp4'
+            return resp
+    except Exception as e:
+        print(f"Error checking video HEAD in MediaGen: {e}")
+        
+    # Return 404 if no file found
+    return "", 404
+
+@app.route('/get/audio/<task_id>', methods=['HEAD'])
+def head_audio(task_id: str):
+    """HEAD request handler for audio files"""
+    # Check multiple possible paths
+    paths_to_check = [
+        os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav"),
+        os.path.join(OUTPUT_DIR, f"{task_id}_audio.wav")
+    ]
+    
+    for audio_path in paths_to_check:
+        if os.path.exists(audio_path):
+            # Get file stats
+            file_stats = os.stat(audio_path)
+            
+            # Create a Response object
+            response = Response("")
+            
+            # Add headers to the response
+            response.headers['Content-Length'] = str(file_stats.st_size)
+            response.headers['Accept-Ranges'] = 'bytes'
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Content-Type'] = 'audio/wav'
+            
+            return response
+            
+    # Return 404 if no file found
+    return "", 404
+
 # ------------------------------------------------------------------------------
 # 8) EXISTING ENDPOINTS - Unmodified
 # ------------------------------------------------------------------------------
@@ -595,98 +689,71 @@ def debug_response():
         as_attachment=True,
         download_name=user_audio.filename
     )
-@app.route('/video_status/<task_id>')
-def video_status(task_id):
-    """Check if a video is ready and provide its URL"""
-    # First check if the file exists locally
-    video_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
-    file_exists = os.path.exists(video_path)
-    
-    if file_exists:
-        return jsonify({
-            "task_id": task_id,
-            "status": "completed",
-            "video_url": f"/get/visual/{task_id}"
-        })
-    
-    # If not found locally, try checking with MediaGen
-    try:
-        response = requests.get(f"http://mediagen:9001/video_status/{task_id}", timeout=3)
-        if response.status_code == 200:
-            return jsonify(response.json())
-        else:
-            return jsonify({
-                "task_id": task_id, 
-                "status": "generating", 
-                "message": "Video still being generated"
-            })
-    except Exception as e:
-        return jsonify({
-            "task_id": task_id, 
-            "status": "unknown",
-            "error": str(e)
-        })
-
-@app.route('/mediagen/video_status/<task_id>')
-def proxy_video_status(task_id):
-    """Proxy endpoint to check video generation status in MediaGen."""
-    try:
-        response = requests.get(f"http://mediagen:9001/video_status/{task_id}", timeout=5)
-        return jsonify(response.json()), response.status_code
-    except Exception as e:
-        return jsonify({"error": str(e), "status": "error"}), 500
 
 @app.route('/get/visual/<task_id>')
 def proxy_visual(task_id):
     """Proxy endpoint to get video from MediaGen."""
     try:
+        # First check if we have the file locally
+        local_path = os.path.join(OUTPUT_DIR, f"{task_id}_visual.mp4")
+        if os.path.exists(local_path):
+            # Create response without headers parameter
+            response = send_file(
+                local_path, 
+                mimetype="video/mp4", 
+                as_attachment=False,
+                download_name=f"{task_id}_visual.mp4",
+                conditional=True,
+                etag=True
+            )
+            
+            # Add headers directly to the response object
+            response.headers['Accept-Ranges'] = 'bytes'
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            response.headers['Content-Type'] = 'video/mp4'
+            
+            return response
+            
         # Forward the request to MediaGen
         response = requests.get(f"http://mediagen:9001/get/visual/{task_id}", stream=True)
         
         # If the video exists, stream it back to the client
         if response.status_code == 200:
-            return Response(
-                response.iter_content(chunk_size=1024),
-                content_type=response.headers['Content-Type'],
-                status=response.status_code,
-                headers={
-                    'Accept-Ranges': 'bytes',  # Added for better video streaming
-                    'Cache-Control': 'public, max-age=3600'
-                }
-            )
+            # Try to save to local cache
+            try:
+                video_data = response.content
+                with open(local_path, "wb") as f:
+                    f.write(video_data)
+                print(f"Cached video file locally: {local_path}")
+                
+                # Serve the local file
+                return send_file(
+                    local_path,
+                    mimetype="video/mp4",
+                    as_attachment=False,
+                    download_name=f"{task_id}_visual.mp4",
+                    conditional=True,
+                    etag=True
+                )
+            except Exception as e:
+                print(f"Error caching video: {e}")
+                
+                # Fall back to proxying
+                return Response(
+                    response.iter_content(chunk_size=1024),
+                    content_type=response.headers['Content-Type'],
+                    status=response.status_code,
+                    headers={
+                        'Accept-Ranges': 'bytes',
+                        'Cache-Control': 'public, max-age=3600'
+                    }
+                )
         else:
             return jsonify({"error": "Video not found"}), 404
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/get/audio/<task_id>', methods=['HEAD'])
-def head_audio(task_id: str):
-    """HEAD request handler for audio files"""
-    # Check multiple possible paths
-    paths_to_check = [
-        os.path.join(OUTPUT_DIR, f"{task_id}_tts.wav"),
-        os.path.join(OUTPUT_DIR, f"{task_id}_audio.wav")
-    ]
-    
-    for audio_path in paths_to_check:
-        if os.path.exists(audio_path):
-            # Get file stats
-            file_stats = os.stat(audio_path)
-            
-            # Create a Response object
-            response = Response("")
-            
-            # Add headers to the response
-            response.headers['Content-Length'] = str(file_stats.st_size)
-            response.headers['Accept-Ranges'] = 'bytes'
-            response.headers['Cache-Control'] = 'public, max-age=3600'
-            response.headers['Access-Control-Allow-Origin'] = '*'
-            response.headers['Content-Type'] = 'audio/wav'
-            
-            return response
-            
-    # Return 404 if no file found
-    return "", 404
 # ------------------------------------------------------------------------------
 # 6) MAIN
 # ------------------------------------------------------------------------------

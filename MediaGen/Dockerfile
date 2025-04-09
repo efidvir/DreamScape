@@ -6,14 +6,15 @@ WORKDIR /app
 # Set environment variable to avoid timezone prompt during installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=UTC
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
-    python3-opencv \
+    git \
     curl \
-    build-essential \
+    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Create necessary directories with proper permissions
@@ -30,36 +31,27 @@ ENV PIP_PREFER_BINARY=1
 # Upgrade pip
 RUN pip install --no-cache-dir --upgrade pip
 
-# ✅ Install compatible torch and torchaudio explicitly from PyTorch index
+# Install PyTorch packages from the PyTorch index
 RUN pip install --no-cache-dir \
     torch==2.0.0 \
     torchaudio==2.0.1 \
     --index-url https://download.pytorch.org/whl/cu117
 
-# Install problematic packages separately first
-RUN pip install --no-cache-dir \
-    numpy==1.24.3 \
-    scipy==1.10.1 \
-    librosa==0.10.1 \
-    numba==0.57.1
+# Install key dependencies in the right order
+RUN pip install --no-cache-dir numpy==1.23.5 && \
+    pip install --no-cache-dir numba==0.56.4 && \
+    pip install --no-cache-dir scipy==1.10.1 && \
+    pip install --no-cache-dir librosa==0.10.0 && \
+    pip install --no-cache-dir pydantic==1.10.8 && \
+    pip install --no-cache-dir diffusers==0.12.0 && \
+    pip install --no-cache-dir transformers==4.27.0
+
+# Copy requirements and install remaining packages
+COPY requirements.txt /app/
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY . /app/
-
-# Install lightweight dependencies
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    requests \
-    python-multipart \
-    pillow \
-    httpx \
-    cryptography \
-    pydantic
-
-# Install remaining packages
-COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r requirements.txt
 
 # Expose the port
 EXPOSE 9001

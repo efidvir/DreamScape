@@ -1,25 +1,45 @@
-# requirements.txt
-# Core ML dependencies are installed separately in the Dockerfile
+# Core requirements
+fastapi==0.95.2
+uvicorn[standard]==0.22.0
+python-multipart==0.0.6
+pydantic==1.10.8
+httpx==0.24.1
+requests==2.31.0
+loguru==0.7.0
 
-# Media generation
-diffusers
-transformers
-accelerate
-omegaconf
-opencv-python-headless
-soundfile
-ffmpeg-python
+# PyTorch (these are installed separately from the PyTorch index in Dockerfile)
+# torch==2.0.0
+# torchaudio==2.0.1
 
-# TTS
-TTS
-pydub
+# Data processing
+numpy==1.23.5
+scipy==1.10.1
 
-# Google Cloud dependencies
-google-cloud-speech
-google-auth
-google-auth-oauthlib
-google-api-core
+# Media processing
+imageio==2.31.1
+imageio-ffmpeg==0.4.8
+ffmpeg-python==0.2.0
+soundfile==0.12.1
 
-# Other dependencies
-safetensors==0.4.1
-grpcio
+# Audio processing
+librosa==0.10.0
+numba==0.56.4
+TTS==0.14.3
+pydub==0.25.1
+
+# Google Cloud for STT/TTS
+google-cloud-speech==2.20.0
+google-cloud-texttospeech==2.14.1
+google-auth==2.22.0
+google-auth-oauthlib==1.0.0
+google-api-core==2.11.1
+grpcio==1.56.2
+
+# ML model generation
+diffusers==0.12.0
+transformers==4.27.0
+huggingface_hub==0.13.0
+accelerate==0.18.0
+
+# Security
+cryptography==41.0.3
