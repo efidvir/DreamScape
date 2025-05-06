@@ -12,7 +12,6 @@ services:
       - mynetwork
     depends_on:
       - init
-      #- backend
 
   backend:
     build: ./backend
@@ -27,33 +26,41 @@ services:
       - LLM_URL=http://container_llm:9000
     depends_on:
       - init
-      #- mediagen
-      #- container_llm
 
   mediagen:
-    build: 
-      context: ./MediaGen
+    build:
+      context: ./mediagen
       dockerfile: Dockerfile
-    ports:
-      - "5001:9001"
+    container_name: mediagen
     volumes:
+      # Don't mount the entire app directory
       - ./model_cache:/app/model_cache:rw
       - ./generated_media:/app/generated_media:rw
-      - ./generated_media:/app/static/media:rw
-    runtime: nvidia
+      - ./static/media:/app/static/media:rw
+    ports:
+      - "9001:9001"  # Application API
+      - "8786:8786"  # Dask scheduler - important to expose this to allow remote workers to connect
+      - "8787:8787"  # Dask dashboard
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - MODEL_CACHE_DIR=/app/model_cache
       - OUTPUT_DIR=/app/generated_media
+      - DASK_SCHEDULER_PORT=8786
+      - DASK_DASHBOARD_PORT=8787
+      - REMOTE_WORKER_IP=10.100.102.27
     networks:
       - mynetwork
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     depends_on:
       - init
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9001/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
 
   container_llm:
     build: ./container_LLM
@@ -81,8 +88,8 @@ services:
   init:
     image: alpine
     command: >
-      sh -c "mkdir -p /data/generated_media /data/model_cache && 
-             chmod -R 777 /data/generated_media /data/model_cache && 
+      sh -c "mkdir -p /data/generated_media /data/model_cache /data/static/media && 
+             chmod -R 777 /data/generated_media /data/model_cache /data/static/media && 
              echo 'Directories initialized with proper permissions'"
     volumes:
       - ./:/data

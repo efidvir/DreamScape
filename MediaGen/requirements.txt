@@ -43,3 +43,9 @@ accelerate==0.18.0
 
 # Security
 cryptography==41.0.3
+
+# Add Dask distributed computing requirements
+dask[complete]>=2025.4.1
+distributed>=2025.4.1
+bokeh>=2.4.3  # For Dask dashboard visualization
+python-multipart 
