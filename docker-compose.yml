@@ -83,6 +83,8 @@ services:
       VOICE_FEMALE: ${VOICE_FEMALE:-maya}
       VOICE_MALE: ${VOICE_MALE:-daniel}
       TTS_SPEED: ${TTS_SPEED:-0.95}
+      TTS_DEVICE: ${TTS_DEVICE:-cpu}
+      TTS_GPU_MB: ${TTS_GPU_MB:-900}
     volumes:
       - models:/models
     restart: unless-stopped

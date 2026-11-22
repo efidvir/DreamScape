@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import lexicon, prompt, vocab
+from . import guard, lexicon, prompt, vocab
 from .llm import Ollama, parse_json_loose
 from .schema import TurnOutput, parse_turn, turn_schema
 from .story import SESSION_ID_RE, SessionStore
@@ -57,7 +57,7 @@ llm = Ollama(OLLAMA_URL, LLM_MODEL,
              num_thread=int(os.environ.get("LLM_NUM_THREAD", "0") or 0))
 store = SessionStore(DATA_DIR)
 locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-stats = {"turns": 0, "fallbacks": 0, "wrong_language": 0}
+stats = {"turns": 0, "fallbacks": 0, "wrong_language": 0, "softened": 0}
 # The last few raw model answers, for /debug/recent (tuning the prompt on a live game).
 recent: deque[dict] = deque(maxlen=20)
 
@@ -327,15 +327,56 @@ def first_sentence(partial: str) -> str:
     return ""
 
 
+def _gentle(words: str, heard_as: guard.Heard, drift: str) -> str:
+    """The dreamer's words as the player may hear them: listed words dissolved, and an
+    answer that steps out of the dream ("as an AI...") turned into the dream drifting."""
+    words = guard.clean(words)
+    if not heard_as.care and guard.steps_out(words):
+        return drift
+    return words
+
+
+def _unmarked(text: str) -> str:
+    return " ".join(text.replace(guard.DISSOLVED, " ").split())
+
+
+def _keep_gentle(out: TurnOutput, heard_as: guard.Heard, drift: str, stepped_out: bool = False) -> None:
+    """The same for the whole answer: what the dream remembers and shows stays gentle.
+    stepped_out: the model's own reply left the dream (it was replaced while streaming)."""
+    stepped_out = stepped_out or (not heard_as.care and guard.steps_out(out.reply))
+    out.reply = _gentle(out.reply, heard_as, drift)
+    out.facts = [_unmarked(f) for f in out.facts if not guard.flagged(f) and _unmarked(f)]
+    out.self_label = "" if guard.flagged(out.self_label) else _unmarked(out.self_label)
+    for t in out.add:
+        t.label = "" if guard.flagged(t.label) else _unmarked(t.label)
+    if guard.flagged(out.backdrop):
+        out.backdrop = ""
+    if stepped_out:                      # nothing of a refused request reaches the scene
+        out.facts, out.add, out.change, out.remove, out.backdrop = [], [], [], [], ""
+    if out.effect == "none" and (heard_as.drift or stepped_out):
+        out.effect = "ripple"            # the picture wavers as the dream moves on
+    elif out.effect == "none" and heard_as.care:
+        out.effect = "bloom"
+
+
 async def _turn_events(body: TurnIn):
     """One turn as events: ("first", the reply's first sentence) as soon as the model has
     written it, ("reply", all the words) once they are complete, then ("final", the whole
     payload). Must be entered after the model is ready."""
     sess = _load(body.session_id) or store.create(body.session_id, _lang(body.lang))
-    text = " ".join(body.text.split())
+    said = " ".join(body.text.split())
+    # Words the dream leaves out dissolve before the storyteller hears them, and the page
+    # shows the player the same dissolved line.
+    heard_as = guard.hear(said)
+    text = heard_as.text or guard.DISSOLVED
+    if text != said:
+        yield "heard", {"text": text}
+    if heard_as.kinds:
+        stats["softened"] += 1
     # Answer in the language the player actually used; the hint only breaks ties.
     lang = prompt.detect_lang(text, _lang(body.lang, sess.lang))
     heard = lexicon.read(text)
+    drift = guard.drift_line(lang)     # one per turn, so a replaced sentence and reply agree
     async with locks[sess.id]:
         sess.lang = lang
         # Hebrew verbs about the dreamer agree with its gender, known or just given.
@@ -346,7 +387,8 @@ async def _turn_events(body: TurnIn):
             # right one, plus a plain reminder.
             msgs = prompt.build_messages(sess.summary(), sess.history, text, lang, HISTORY_TURNS,
                                          sess.now_line(), pictures=body.pictures,
-                                         strict_lang=wrong_lang, gender=gender)
+                                         strict_lang=wrong_lang, gender=gender,
+                                         note=guard.note(heard_as))
             try:
                 # The second try runs a little cooler, which usually fixes a malformed answer.
                 written, wrong_lang = "", False
@@ -364,6 +406,7 @@ async def _turn_events(body: TurnIn):
                             words = first_sentence(_json_text(m.group(1)))
                         else:
                             continue
+                        words = _gentle(words, heard_as, drift)
                         if not words:
                             continue
                         said_in = prompt.detect_lang(words, lang)
@@ -395,8 +438,10 @@ async def _turn_events(body: TurnIn):
                                "prompt_tokens_per_s": llm.last_prompt_tokens_per_s,
                                "model": body.model or llm.model, "raw": raw})
                 got = parse_turn(raw)
+                stepped_out = not heard_as.care and guard.steps_out(got.reply)
                 if early:
                     got.reply = early            # the player is already hearing these words
+                _keep_gentle(got, heard_as, drift, stepped_out)
                 if got.reply:
                     out = got
                     break

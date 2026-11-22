@@ -102,3 +102,43 @@ def test_a_caller_who_went_away_is_not_spoken_for(client, monkeypatch):
     r = client.post("/tts", json={"text": "hello", "lang": "en"})
     assert r.status_code == 499 and calls == []
     main.tts.state = "waiting"
+
+
+def _fake_ort(monkeypatch, providers):
+    fake = types.ModuleType("onnxruntime")
+    fake.get_available_providers = lambda: list(providers)
+    fake.preload_dlls = lambda **kw: None
+    monkeypatch.setitem(__import__("sys").modules, "onnxruntime", fake)
+
+
+def test_the_voice_uses_the_gpu_only_when_onnx_runtime_can(monkeypatch):
+    from app import tts as tts_mod
+    _fake_ort(monkeypatch, ["CPUExecutionProvider"])
+    assert tts_mod.gpu_providers(900) is None
+    _fake_ort(monkeypatch, ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    got = tts_mod.gpu_providers(900)
+    assert got[0][0] == "CUDAExecutionProvider" and got[-1] == "CPUExecutionProvider"
+    assert got[0][1]["gpu_mem_limit"] == str(900 * 1024 * 1024)
+
+
+def test_a_voice_asked_for_the_gpu_falls_back_to_the_cpu(monkeypatch):
+    from app import tts as tts_mod
+    made = {}
+
+    class FakeBlue:
+        def __init__(self, onnx_dir, style_json, providers):
+            made["providers"] = providers
+            first = providers[0][0] if isinstance(providers[0], tuple) else providers[0]
+            session = types.SimpleNamespace(get_providers=lambda: [first])
+            self.tts = types.SimpleNamespace(vector_est_ort=session)
+
+    monkeypatch.setitem(__import__("sys").modules, "blue_onnx", types.SimpleNamespace(BlueTTS=FakeBlue))
+    t = tts_mod.TextToSpeech()
+    _fake_ort(monkeypatch, ["CPUExecutionProvider"])
+    _, device = t._engine("cuda")
+    assert device == "cpu" and made["providers"] == ["CPUExecutionProvider"]
+    _fake_ort(monkeypatch, ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    _, device = t._engine("cuda")
+    assert device == "cuda" and made["providers"][0][0] == "CUDAExecutionProvider"
+    _, device = t._engine("cpu")
+    assert device == "cpu"

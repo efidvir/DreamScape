@@ -79,7 +79,7 @@ async def healthz():
         status = "loading"
     return {"service": "voice", "status": status,
             "stt": {"state": stt.state, "detail": stt.detail, "device": stt.active_device},
-            "tts": {"state": tts.state, "detail": tts.detail},
+            "tts": {"state": tts.state, "detail": tts.detail, "device": tts.active_device},
             "uptime_s": round(time.time() - STARTED)}
 
 
@@ -131,8 +131,21 @@ async def text_to_speech(body: SpeakIn, request: Request):
     return Response(content=wav, media_type="audio/wav", headers={"X-Synth-Seconds": str(took)})
 
 
-GPU_FIELDS = ("name", "memory.used", "memory.total", "utilization.gpu", "temperature.gpu",
-              "clocks.sm", "clocks.max.sm", "power.draw", "power.limit")
+class DeviceIn(BaseModel):
+    device: str = Field(pattern="^(cuda|cpu)$")
+
+
+@app.post("/debug/device")
+async def debug_device(body: DeviceIn):
+    """Move the voice between the GPU and the CPU until the service restarts (TTS_DEVICE
+    makes it stick), to compare the two on a live machine."""
+    async with TTS_GATE:
+        await asyncio.to_thread(tts.load, body.device)
+    return {"asked": body.device, "device": tts.active_device, "state": tts.state, "detail": tts.detail}
+
+
+GPU_FIELDS = ("name", "driver_version", "memory.used", "memory.total", "utilization.gpu",
+              "temperature.gpu", "clocks.sm", "clocks.max.sm", "power.draw", "power.limit")
 
 
 def _gpu_query(fields: tuple[str, ...]) -> list[str]:

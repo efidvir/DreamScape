@@ -1,4 +1,5 @@
-"""Text to speech with BlueTTS (Hebrew-first, also English), on the CPU through ONNX Runtime.
+"""Text to speech with BlueTTS (Hebrew-first, also English) through ONNX Runtime, on the GPU
+when TTS_DEVICE=cuda and the graphics card has room, otherwise on the CPU.
 
 The model bundle is downloaded from Hugging Face on first start into /models/bluev3.
 The dreamer starts with a neutral voice (two voices averaged) and switches to a
@@ -58,6 +59,25 @@ class download_meter:
         return False
 
 
+def gpu_providers(mem_mb: int) -> list | None:
+    """ONNX Runtime providers that run the voice on the GPU, or None when this ONNX Runtime
+    cannot (a CPU-only build, or CUDA libraries it cannot load). The memory cap keeps the
+    voice from crowding the storyteller's model on an 8 GB card."""
+    try:
+        import onnxruntime as ort
+        if hasattr(ort, "preload_dlls"):
+            ort.preload_dlls(cuda=True, cudnn=True, msvc=False)
+        if "CUDAExecutionProvider" not in ort.get_available_providers():
+            return None
+    except Exception as e:  # noqa: BLE001
+        log.warning("the GPU voice is unavailable (%s: %s)", type(e).__name__, e)
+        return None
+    opts = {"device_id": "0", "arena_extend_strategy": "kSameAsRequested",
+            "cudnn_conv_algo_search": "HEURISTIC", "cudnn_conv_use_max_workspace": "0",
+            "gpu_mem_limit": str(int(mem_mb) * 1024 * 1024)}
+    return [("CUDAExecutionProvider", opts), "CPUExecutionProvider"]
+
+
 def _voice_list(env: str, default: str) -> list[str]:
     return [v.strip() for v in os.environ.get(env, default).split(",") if v.strip()]
 
@@ -72,6 +92,9 @@ class TextToSpeech:
             "female": _voice_list("VOICE_FEMALE", "maya"),
             "male": _voice_list("VOICE_MALE", "daniel"),
         }
+        self.device = os.environ.get("TTS_DEVICE", "cpu").lower()     # cuda or cpu
+        self.gpu_mb = int(os.environ.get("TTS_GPU_MB", "900"))
+        self.active_device = ""
         self.engine = None
         self.styles: dict[str, object] = {}
         self.sample_rate = 44100
@@ -101,16 +124,27 @@ class TextToSpeech:
     def _path(self, name: str) -> str:
         return os.path.join(self.root, "voices", f"{name}.json")
 
-    def load(self) -> None:
+    def _engine(self, device: str):
+        from blue_onnx import BlueTTS
+        providers = gpu_providers(self.gpu_mb) if device in ("cuda", "gpu") else None
+        if device in ("cuda", "gpu") and not providers:
+            log.warning("TTS_DEVICE=%s, but ONNX Runtime cannot use the GPU here; the voice runs on the CPU",
+                        device)
+        engine = BlueTTS(onnx_dir=os.path.join(self.root, "onnx"),
+                         style_json=[self._path(v) for v in self.voices["neutral"]],
+                         providers=providers or ["CPUExecutionProvider"])
+        used = engine.tts.vector_est_ort.get_providers()[0] if hasattr(engine, "tts") else ""
+        return engine, ("cuda" if used == "CUDAExecutionProvider" else "cpu")
+
+    def load(self, device: str | None = None) -> None:
         try:
             self.state = "loading"
             if not os.path.isdir(os.path.join(self.root, "onnx")):
                 self._download()
             self._ensure_polyg2p()
             self.detail = "loading BlueTTS"
-            from blue_onnx import BlueTTS
-            self.engine = BlueTTS(onnx_dir=os.path.join(self.root, "onnx"),
-                                  style_json=[self._path(v) for v in self.voices["neutral"]])
+            with self._lock:     # a voice switch waits for the clip being spoken
+                self.engine, self.active_device = self._engine((device or self.device).lower())
             self.sample_rate = self.engine.sample_rate
             self.styles["neutral"] = self.engine.style
             for key in ("female", "male"):
@@ -119,7 +153,8 @@ class TextToSpeech:
                 except Exception as e:  # noqa: BLE001
                     log.warning("voice %s unavailable: %s", key, e)
             self.engine.synthesize("שלום", lang="he")     # warm-up
-            self.state, self.detail = "ready", f"BlueTTS, voices: {', '.join(self.styles)}"
+            self.state = "ready"
+            self.detail = f"BlueTTS on {self.active_device}, voices: {', '.join(self.styles)}"
         except Exception as e:  # noqa: BLE001
             self.state, self.detail = "error", f"{type(e).__name__}: {e}"[:300]
             log.exception("TTS failed to load")

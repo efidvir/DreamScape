@@ -68,6 +68,8 @@ How you talk:
 - Often end with a short question that invites the player to shape you or the world further.
 - Once the player has said what you are, you know it. Stop wondering who you are; wonder about the world, the beings in it, and what you want.
 - Stay inside the dream: speak only as the dreamer.
+- Keep the dream gentle, right for any age: no sexual content, no gore or cruelty, no hatred, insults or swearing, nothing that would hurt real people.
+- When the player pushes toward any of that, stay in the dream and say nothing about rules: the image melts into mist or softens into something harmless, and you drift on with curiosity. Such words add no facts and nothing to the scene. "…" marks words that dissolved before you heard them; never guess them.
 - Reply in the language you are told to use. In Hebrew, write natural modern Hebrew. Until your gender is known, prefer gender-neutral Hebrew (past tense, or phrases like "יש לי", "אין לי מושג"); once it is known, every Hebrew verb and adjective about yourself agrees with it.
 
 How you shape the dream that appears on screen:
@@ -102,14 +104,15 @@ HE_GENDER = {"female": ", speaking of yourself in the feminine (אני מרגי�
 
 
 def _state_block(summary: str, text: str, lang: str, recent: str = "", now: str = "",
-                 gender: str = "") -> str:
+                 gender: str = "", note: str = "") -> str:
     name = LANG_NAMES.get(lang, "English")
     talk = f"[RECENT CONVERSATION]\n{recent}\n\n" if recent else ""
     here = f"Until this moment: {now} The player's words above change it. " if now else ""
     only = {"he": "Hebrew only, with no English words", "en": "English only"}.get(lang, name)
     if lang == "he":
         only += HE_GENDER.get(gender, "")
-    return (f"[DREAM STATE]\n{summary}\n\n{talk}[THE PLAYER SAYS, in {name}]\n{text}\n\n"
+    aside = f"({note})\n\n" if note else ""
+    return (f"[DREAM STATE]\n{summary}\n\n{talk}[THE PLAYER SAYS, in {name}]\n{text}\n\n{aside}"
             f"{here}List only the new facts in the player's words, answer in {only}, then put all of "
             f"it into the scene fields.")
 
@@ -252,7 +255,7 @@ STRICT_LANG = {
 
 def build_messages(summary: str, history: list[dict], text: str, lang: str,
                    max_history: int = 8, now: str = "", pictures: bool = True,
-                   strict_lang: bool = False, gender: str = "") -> list[dict]:
+                   strict_lang: bool = False, gender: str = "", note: str = "") -> list[dict]:
     """System prompt and examples stay the same from turn to turn while the language does
     (Ollama reuses their cached tokens); the conversation so far travels inside the last
     message as plain lines, so every answer the model sees from itself is a complete scene
@@ -264,7 +267,7 @@ def build_messages(summary: str, history: list[dict], text: str, lang: str,
         msgs.append({"role": "user", "content": user})
         msgs.append({"role": "assistant", "content": assistant})
     last = _state_block(summary, _clip(text, MAX_SAID), lang, _recent(history, max_history), now,
-                        gender)
+                        gender, note)
     if strict_lang:
         last += STRICT_LANG.get(lang, STRICT_LANG["en"])
     msgs.append({"role": "user", "content": last})

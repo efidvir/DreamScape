@@ -1,0 +1,9 @@
+# ONNX Runtime's CUDA 13 build for the voice on the GPU (TTS_DEVICE=cuda), in BlueTTS's tested
+# 1.27-1.29 range, with the NVIDIA libraries it loads at start (driver 580 or newer on the host)
+onnxruntime-gpu==1.29.0
+nvidia-cuda-runtime==13.5.37
+nvidia-cublas==13.10.1.6
+nvidia-cuda-nvrtc==13.5.37
+nvidia-cufft==12.5.0.14
+nvidia-curand==10.4.5.25
+nvidia-cudnn-cu13==9.28.1.4

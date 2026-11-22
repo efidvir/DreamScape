@@ -17,6 +17,8 @@ STATE = {"director": "ok", "stt_text": "you are a fairy", "turn": None}
 def ndjson(final: dict) -> httpx.Response:
     """The director's streamed answer: the words first (unless it failed), then the scene."""
     lines = []
+    if STATE.get("heard"):
+        lines.append({"type": "heard", "text": STATE["heard"]})
     if STATE.get("first") and not final.get("fallback"):
         lines.append({"type": "first", "text": STATE["first"], "lang": final.get("lang", "en"),
                       "voice": final.get("voice", "neutral")})
@@ -59,7 +61,7 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
 
 @pytest.fixture
 def client(monkeypatch):
-    STATE.update(director="ok", stt_text="you are a fairy", turn=None, drop=0, first=None)
+    STATE.update(director="ok", stt_text="you are a fairy", turn=None, drop=0, first=None, heard=None)
     monkeypatch.setattr(main, "http", httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)))
     monkeypatch.setattr(main, "HEARTBEAT_S", 0.05)
     with TestClient(main.app) as c:
@@ -339,3 +341,13 @@ def test_a_flood_of_words_while_busy_stays_one_turn_of_words(client):
     finally:
         main.Dreamer.director_events = real
     assert len(seen) == 2 and len(seen[1]) <= main.MAX_CHARS
+
+
+def test_words_the_dream_left_out_fade_from_the_players_line(client):
+    STATE["heard"] = "you are a … dragon"
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef321", "lang": "en"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "you are a f***ing dragon", "lang": None})
+        lines = [m["text"] for m in _collect(ws, "timings") if m["type"] == "transcript"]
+    assert lines == ["you are a f***ing dragon", "you are a … dragon"]

@@ -65,6 +65,10 @@ Browsers allow the microphone only on `localhost` or over HTTPS, so speak to the
 
 A 4B model sometimes answers beautifully and still leaves the scene unchanged. After each turn the director reads the player's own words (Hebrew and English word lists in `services/director/app/lexicon.py`) and fills what the model left out: the place, what the dreamer is, its voice, weather, time of day and the things named. The model's own choices always win; the dream only moves to a new place when the player names one or travels. A turn the model fails twice comes back as a short notice, and the story stays unchanged, so the player can simply say it again. Saying the dreamer wakes up in bed ("אתה מתעורר במיטה", "you wake up in your bed") ends the dream. Words said while the dreamer is still answering are kept and answered right after, and if the storyteller restarts in the middle of a turn, the turn waits for it instead of failing.
 
+### A gentle dream
+
+Whatever the player says becomes true, so the dream keeps itself gentle without ever saying so. Swearing, slurs, sexual words and cruelty or gore dissolve before the storyteller hears them: the player's line on screen shows "…" where those words were, and the storyteller lets the dream drift somewhere softer. The same check runs over everything the dreamer says and over the scene, so its words, its name, the things in the dream and the stored story stay clean. Subtler requests (a cruel plan with no listed word in it, say) are handled by the storyteller's own instructions, and an answer that steps out of the dream ("as an AI…") becomes the picture blurring away. A player who speaks of hurting themselves keeps their words; the dream grows warm and the dreamer answers them with care. The word lists (Hebrew and English, with prefixes, stretched letters and look-alike spellings) are in `services/director/app/guard.py`.
+
 Useful commands:
 
 ```powershell
@@ -79,7 +83,7 @@ docker compose down                     # stop (models and dreams stay in volume
 |---|---|---|
 | Gemma 4 E4B (Q4) with a 4K context | GPU | 4.7 GB |
 | Whisper large-v3-turbo, ivrit.ai, int8 | GPU | 1.5 GB |
-| BlueTTS | CPU | none |
+| BlueTTS | CPU, or GPU with `TTS_DEVICE=cuda` | none, or up to `TTS_GPU_MB` |
 | The 3D dream in the browser | GPU | 0.3 GB |
 | Background pictures | second machine | none |
 
@@ -98,6 +102,8 @@ The dream page shares the graphics card with the storyteller, so while an answer
 | `VOICE_NEUTRAL` | `noa,ariel` | The dreamer's voice before it has a gender (two voices averaged) |
 | `VOICE_FEMALE` / `VOICE_MALE` | `maya` / `daniel` | Voices once the story gives the dreamer a gender |
 | `TTS_SPEED` | `0.95` | Speaking pace |
+| `TTS_DEVICE` | `cpu` | `cuda` runs the voice on the GPU (it falls back to the CPU by itself if the GPU runtime cannot start). `POST /api/debug/voice/device` with `{"device": "cuda"}` or `"cpu"` switches a running game, to compare |
+| `TTS_GPU_MB` | `900` | Video memory the GPU voice may use |
 | `LLM_NUM_THREAD` | `0` | Processor threads for the parts of the model that run on the CPU (0: Ollama decides) |
 | `COMPOSE_PROFILES` | empty | `imagery` turns on the picture service |
 | `IMAGERY_URL` | empty | `http://imagery:9030` when the picture service is on |

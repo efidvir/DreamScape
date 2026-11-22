@@ -336,7 +336,10 @@ class Dreamer:
             try:
                 async for ev in self.director_events(text, lang_hint):
                     kind = ev.get("type")
-                    if kind in ("first", "reply") and early is None:
+                    if kind == "heard":
+                        # Words the dream left out fade from the player's line as well.
+                        await self.send({"type": "transcript", "text": ev.get("text", "")})
+                    elif kind in ("first", "reply") and early is None:
                         # The dreamer's words while the storyteller is still writing: its first
                         # sentence as soon as it is complete, then the rest.
                         self.lang = ev.get("lang", self.lang)
@@ -451,8 +454,9 @@ class Dreamer:
                     return
                 async for line in r.aiter_lines():
                     if line.strip():
-                        said = True
-                        yield json.loads(line)
+                        ev = json.loads(line)
+                        said = said or ev.get("type") != "heard"    # the dreamer has begun
+                        yield ev
         except NotReady:
             raise
         except httpx.TransportError as e:
@@ -579,6 +583,18 @@ async def debug_director(path: str, request: Request):
         else:
             r = await http.post(url, content=await request.body(), timeout=300,
                                 headers={"content-type": "application/json"})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    return Response(r.content, status_code=r.status_code,
+                    media_type=r.headers.get("content-type", "application/json"))
+
+
+@app.post("/api/debug/voice/device")
+async def debug_voice_device(request: Request):
+    """Pass-through to the voice service: move the voice between the GPU and the CPU."""
+    try:
+        r = await http.post(f"{VOICE_URL}/debug/device", content=await request.body(), timeout=180,
+                            headers={"content-type": "application/json"})
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
     return Response(r.content, status_code=r.status_code,
