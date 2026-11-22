@@ -7,8 +7,8 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Let CTranslate2 find the pip-installed CUDA libraries.
-ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib \
+# Let CTranslate2 find the pip-installed cuBLAS.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib \
     HF_HOME=/models/hf \
     WHISPER_DIR=/models/whisper \
     TTS_DIR=/models/bluev3

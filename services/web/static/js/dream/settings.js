@@ -24,7 +24,7 @@ const SETTING = {
   space: { density: 0.005, override: { skyTop: '#010106', skyHorizon: '#0a0a1f', fog: '#05050e', hemiI: 0.4, keyI: 0.9, stars: 1 }, mist: 0.1 },
   moon: { density: 0.012, override: { skyTop: '#000002', skyHorizon: '#07080d', fog: '#0b0c12', hemiSky: '#9aa3b8', hemiGround: '#1b1b20', hemiI: 0.4, key: '#f2f4ff', keyI: 1.05, stars: 1 }, mist: 0.05 },
   clouds: { density: 0.006, override: { skyTop: '#3f78d0' }, mix: ['#b9cce6', 0.3], mist: 0.2 },
-  snow: { density: 0.026, mix: ['#c3d2e2', 0.45], mist: 0.4 },
+  snow: { density: 0.026, mix: ['#9fb2c9', 0.4], mist: 0.35 },
   underwater: { density: 0.055, override: { skyTop: '#021a26', skyHorizon: '#0b5a6e', fog: '#0a4a5c', hemiSky: '#5fd0e0', hemiGround: '#05202a', hemiI: 0.8, key: '#9fe8ff', keyI: 0.8, stars: 0 }, mist: 0.3 },
 };
 
@@ -248,12 +248,16 @@ const BUILD = {
     return { group: g, heightAt: () => -1.2 };
   },
 
-  snow(r) {
+  snow(r, time) {
     const g = new THREE.Group();
     const heightAt = (x, z) => fbm(x, z, 0.04) * 3.5 * flatten(x, z);
-    g.add(makeGround({ color: '#dfe7f0', color2: '#c4d2e2', height: heightAt, glow: 0.18, seam: '#ffffff' }));
+    // Snow by night is moonlit blue-grey; a glowing white field would swallow the dreamer.
+    const dark = time === 'night' || time === 'dusk';
+    g.add(makeGround({ color: dark ? '#93a6c0' : '#dfe7f0', color2: dark ? '#7488a6' : '#c4d2e2', height: heightAt,
+      glow: dark ? 0.05 : 0.14, seam: dark ? '#c9d6ea' : '#ffffff' }));
     const pines = ringPlace(r, 70, 14, 55, heightAt);
-    g.add(flora.trees({ count: pines.length, size: 'large', label: 'pine', color: '#cfdde8' }, r, (i) => pines[i], { glow: 0.15 }).root);
+    g.add(flora.trees({ count: pines.length, size: 'large', label: 'pine', color: dark ? '#7f93ae' : '#cfdde8' }, r,
+      (i) => pines[i], { glow: dark ? 0.05 : 0.12 }).root);
     return { group: g, heightAt };
   },
 

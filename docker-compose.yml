@@ -41,9 +41,10 @@ services:
     build: ./services/director
     environment:
       OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
-      LLM_MODEL: ${LLM_MODEL:-gemma3:4b}
+      LLM_MODEL: ${LLM_MODEL:-gemma4:e4b}
       LLM_NUM_CTX: ${LLM_NUM_CTX:-4096}
       LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.8}
+      LLM_NUM_THREAD: ${LLM_NUM_THREAD:-0}
       DATA_DIR: /data/sessions
     volumes:
       - dreams:/data/sessions
@@ -58,7 +59,11 @@ services:
     environment:
       OLLAMA_KEEP_ALIVE: 2h
       OLLAMA_FLASH_ATTENTION: "1"
-      OLLAMA_KV_CACHE_TYPE: q8_0
+      OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-f16}
+      # GPU kernels compiled on first use are kept in the volume, so later starts skip the
+      # ~45 s compile on the first turn.
+      CUDA_CACHE_PATH: /root/.ollama/cuda-cache
+      CUDA_CACHE_MAXSIZE: "4294967296"
     volumes:
       - ollama:/root/.ollama
     restart: unless-stopped

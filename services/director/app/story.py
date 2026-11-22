@@ -14,10 +14,14 @@ from .schema import TurnOutput
 
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
+# Places with no weather of their own.
+NO_WEATHER = {"space", "moon", "underwater", "cave"}
+
 # Things that belong to a place. When the dream moves somewhere else they stay behind;
 # creatures and objects travel with the dreamer.
 SCENERY = {"tree", "flower", "mushroom", "rock", "water", "fireflies", "cloud", "house",
-           "castle", "fire", "rainbow", "crystal", "portal"}
+           "castle", "fire", "rainbow", "crystal", "portal", "sun", "moon", "planet", "star",
+           "other"}
 
 
 @dataclass
@@ -31,6 +35,11 @@ class Thing:
     where: str = "around"
     motion: str = "still"
     born: int = 0          # turn number it appeared on
+
+
+def _fact_words(fact: str) -> frozenset[str]:
+    """A fact's words: one fact repeats another when all its words are in it."""
+    return frozenset(re.sub(r"[^\w\s]", " ", fact.lower()).split())
 
 
 @dataclass
@@ -84,10 +93,39 @@ class Session:
             lines.append("Things in the dream now: none.")
         return "\n".join(lines)
 
+    def now_line(self) -> str:
+        """One plain sentence of where and what the dreamer is right now."""
+        me = self.self_form if self.self_form != "wisp" else "nameless spark of light"
+        if self.self_label:
+            me = self.self_label
+        a = "an" if me[:1].lower() in "aeiou" else "a"
+        kind = self.setting["kind"]
+        where = {"void": "in a dark mist", "moon": "on the moon", "space": "in space",
+                 "clouds": "above the clouds", "underwater": "under the water",
+                 "snow": "in a snowy land", "mountains": "in the mountains",
+                 "city": "in a city"}.get(kind, f"in a {kind}")
+        return f"You are {a} {me} {where}, at {self.setting['time']}."
+
     # ------------------------------------------------------------------ updates
     def remember(self, role: str, text: str) -> None:
         self.history.append({"role": role, "text": text, "turn": self.turn})
         self.history = self.history[-40:]
+
+    def forget_replies(self, replies: set[str]) -> bool:
+        """Drop every exchange that ended in one of these replies (old fallback lines),
+        so the model never learns to keep repeating them."""
+        kept: list[dict] = []
+        changed = False
+        for h in self.history:
+            if h["role"] == "assistant" and h["text"] in replies:
+                changed = True
+                if kept and kept[-1]["role"] == "user":
+                    kept.pop()
+                continue
+            kept.append(h)
+        if changed:
+            self.history = kept
+        return changed
 
     def apply(self, out: TurnOutput) -> dict:
         """Apply one LLM turn. Returns what changed, for the renderer."""
@@ -96,8 +134,12 @@ class Session:
         effect = out.effect
 
         for f in out.facts:
-            if f.lower() not in {x.lower() for x in self.facts}:
-                self.facts.append(f)
+            new = _fact_words(f)
+            if not new or any(new <= _fact_words(x) for x in self.facts):
+                continue                    # already known, perhaps in more detail
+            # a fact that says more replaces the one it extends ("I am a witch" -> "... young witch")
+            self.facts = [x for x in self.facts if not _fact_words(x) <= new]
+            self.facts.append(f)
         self.facts = self.facts[-vocab.MAX_FACTS:]
 
         if out.voice != "same":
@@ -105,6 +147,9 @@ class Session:
 
         if out.self_form != "same" and out.self_form != self.self_form:
             self.self_form = out.self_form
+            # A new form starts from its own look: the wisp's pale glow or an old label
+            # ("a fairy with silver wings") must not carry over to a dragon.
+            self.self_label, self.self_color = "", ""
             if effect == "none":
                 effect = "sparkle"
         if out.self_label:
@@ -120,6 +165,9 @@ class Session:
             self.setting["kind"] = new_kind
             if effect == "none":
                 effect = "warp"
+            # Rain and snow stay behind on the moon, in space, under water and in caves.
+            if out.setting_weather == "same" and new_kind in NO_WEATHER:
+                self.setting["weather"] = "clear"
         if out.setting_time != "same":
             self.setting["time"] = out.setting_time
         if out.setting_weather != "same":
@@ -227,3 +275,7 @@ class SessionStore:
 
     def count(self) -> int:
         return len(self._mem)
+
+    @staticmethod
+    def blank_summary() -> str:
+        return Session(id="warmup").summary()

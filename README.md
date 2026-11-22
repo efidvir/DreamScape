@@ -11,16 +11,16 @@ flowchart LR
   B["Browser<br/>3D dream, mic, voice"] <-- WebSocket --> W["web<br/>page, turn pipeline, heartbeats"]
   W -- "recorded speech" --> V["voice<br/>Whisper STT · BlueTTS"]
   W -- "player's words" --> D["director<br/>story memory, scene"]
-  D -- "chat + JSON schema" --> O["ollama<br/>Gemma 3 4B"]
+  D -- "chat + JSON schema" --> O["ollama<br/>Gemma 4 E4B"]
   W -. "optional" .-> I["imagery<br/>Dask scheduler"]
   I -. "Dask" .-> G["GPU worker<br/>second machine"]
 ```
 
 1. You hold the glowing orb (or the space bar) and speak. The browser sends the recording to **web**.
 2. **voice** transcribes it with ivrit.ai's Hebrew-tuned Whisper.
-3. **director** asks the language model for one JSON answer that holds both the dreamer's spoken reply and the scene changes (new setting, things that appear, effects). Ollama's structured outputs guarantee valid JSON, and the director keeps the story's facts and the scene between turns.
-4. The scene update reaches the browser at once and starts materialising while **voice** synthesises the reply with BlueTTS.
-5. The dreamer speaks, and its light pulses with its voice.
+3. **director** asks the language model for one JSON answer that holds both the dreamer's spoken reply and the scene changes (new setting, things that appear, effects). Ollama's structured outputs guarantee valid JSON, and the director keeps the story's facts and the scene between turns. The model writes the reply early in its answer, and the director streams its first sentence out the moment that sentence is complete. If those first words come out in the wrong language, the director asks again before you hear anything.
+4. **voice** starts speaking that first sentence with BlueTTS (a long one is cut at its first comma) while the model is still writing the rest, so the dreamer starts talking about 2 to 3 seconds after you press Enter, or 2.5 to 4 seconds after you stop speaking.
+5. The scene update follows a second or two later and materialises while the dreamer talks; its light pulses with its voice.
 
 ### How the dream is drawn
 
@@ -37,14 +37,33 @@ Anything outside the vocabulary appears as a shimmering apparition until its pic
 
 You need Docker Desktop (WSL 2 backend), an NVIDIA driver with WSL support, and about 15 GB of free disk for images and models.
 
+On Windows, double-click **start.bat**: it builds and starts every container, then opens the page once it answers. From a terminal:
+
 ```powershell
 copy .env.example .env        # optional: every setting has a default
 docker compose up -d --build
 ```
 
-Open **http://localhost**. The first start downloads the models (Gemma 3 4B ≈ 3.3 GB, Whisper turbo ≈ 1.6 GB, and the BlueTTS bundle). The dots in the top corner show each service's heartbeat; hover for details such as download progress or tokens per second. Typing works as soon as the storyteller dot is green.
+Open **http://localhost**. The first start downloads the models (Gemma 4 E4B ≈ 6.6 GB, Whisper turbo ≈ 1.6 GB, and the BlueTTS bundle ≈ 0.7 GB). Until they are ready, the page lists what is still loading with its progress, and anything you say or type waits and is answered as soon as the storyteller is ready. The dots in the top corner show each service's heartbeat; hover for details such as tokens per second.
+
+After every start the storyteller runs one short warm-up turn, exactly like a real one, so your first turn is as quick as the rest. The first start after the Ollama container is created also compiles GPU code, which makes the first ten minutes or so of play slower; the compiled code is kept in the `ollama` volume for every start after that.
 
 Browsers allow the microphone only on `localhost` or over HTTPS, so speak to the dream from the laptop itself; from another device on the network you can still type. Press F2 to see how long each turn took (speech-to-text, storyteller, voice).
+
+### Live code and checking a running game
+
+`docker-compose.override.yml` runs the web, storyteller and voice services straight from this folder and restarts each one when its code changes, so edits apply without rebuilding. Page files apply on the next page reload. Delete the file to run only the code baked into the images.
+
+- **http://localhost/api/status**: every service's heartbeat, as the page sees it.
+- **http://localhost/api/debug/recent**: the storyteller's last raw answers, and what the director filled in from the player's own words (see below).
+- **http://localhost/api/debug/gpu**: video memory, load, clock, temperature and why the clock is held back, plus the processors' load.
+- **http://localhost/api/debug/tts?text=...&lang=he**: how long one sentence takes to synthesize.
+- **http://localhost/api/debug/director/models** and **/loaded**: the downloaded models with their sizes, and what is in memory now.
+- `POST /api/debug/director/turn` with `{"session_id", "text", "model"}` answers one turn with any downloaded model and reports its speed; `POST /api/debug/director/model` with `{"model"}` plays with another model until the next restart (`LLM_MODEL` makes it stick); `/pull` downloads one alongside, `/unload` frees one.
+
+### When the model misses something
+
+A 4B model sometimes answers beautifully and still leaves the scene unchanged. After each turn the director reads the player's own words (Hebrew and English word lists in `services/director/app/lexicon.py`) and fills what the model left out: the place, what the dreamer is, its voice, weather, time of day and the things named. The model's own choices always win; the dream only moves to a new place when the player names one or travels. A turn the model fails twice comes back as a short notice, and the story stays unchanged, so the player can simply say it again. Saying the dreamer wakes up in bed ("אתה מתעורר במיטה", "you wake up in your bed") ends the dream. Words said while the dreamer is still answering are kept and answered right after, and if the storyteller restarts in the middle of a turn, the turn waits for it instead of failing.
 
 Useful commands:
 
@@ -58,25 +77,28 @@ docker compose down                     # stop (models and dreams stay in volume
 
 | Part | Runs on | Approx. |
 |---|---|---|
-| Gemma 3 4B (Q4) with a 4K context | GPU | 3.7 GB |
+| Gemma 4 E4B (Q4) with a 4K context | GPU | 4.7 GB |
 | Whisper large-v3-turbo, ivrit.ai, int8 | GPU | 1.5 GB |
 | BlueTTS | CPU | none |
 | The 3D dream in the browser | GPU | 0.3 GB |
 | Background pictures | second machine | none |
 
-That leaves headroom on 8 GB. If you already run Ollama on Windows, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env` and the container uses it.
+Measured together on the RTX 4070 Laptop: 7.6 of 8.2 GB in use, so there is room for the game but not for another big GPU program next to it. `LLM_MODEL=gemma3:4b` in `.env` frees a gigabyte (6.6 GB in use) at the cost of plainer Hebrew and slower answers. If you already run Ollama on Windows, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env` and the container uses it.
+
+The dream page shares the graphics card with the storyteller, so while an answer is being written it draws 30 frames a second, and it keeps a full 60 the rest of the time.
 
 ## Settings (`.env`)
 
 | Variable | Default | What it does |
 |---|---|---|
 | `WEB_PORT` | `80` | Port of the dream page |
-| `LLM_MODEL` | `gemma3:4b` | Any Ollama model tag; it is pulled automatically on first start |
+| `LLM_MODEL` | `gemma4:e4b` | Any Ollama model tag; it is pulled automatically on first start. `gemma3:4b` is the lighter choice |
 | `STT_MODEL` | `ivrit-ai/whisper-large-v3-turbo-ct2` | Speech-to-text model (faster-whisper) |
 | `STT_MODEL_EN` | empty | A second model for English, loaded on the first English utterance |
 | `VOICE_NEUTRAL` | `noa,ariel` | The dreamer's voice before it has a gender (two voices averaged) |
 | `VOICE_FEMALE` / `VOICE_MALE` | `maya` / `daniel` | Voices once the story gives the dreamer a gender |
 | `TTS_SPEED` | `0.95` | Speaking pace |
+| `LLM_NUM_THREAD` | `0` | Processor threads for the parts of the model that run on the CPU (0: Ollama decides) |
 | `COMPOSE_PROFILES` | empty | `imagery` turns on the picture service |
 | `IMAGERY_URL` | empty | `http://imagery:9030` when the picture service is on |
 
@@ -125,6 +147,8 @@ services/
   imagery/    SD-Turbo pictures through Dask (one image for scheduler and worker)
 worker/       compose file for the second GPU machine
 dev/          GPU-free demo, fakes and screenshot script
+start.bat     Windows: start everything and open the page
+docker-compose.override.yml   live code from this folder (see "Live code")
 ```
 
 Run the director's tests with `cd services/director && pip install -r requirements-dev.txt && pytest`.
@@ -132,8 +156,17 @@ Run the director's tests with `cd services/director && pip install -r requiremen
 ## What changed from the first version
 
 - The dream is drawn live in the browser with Three.js as soft particle clouds, with generated pictures turned into particles when the imagery service runs. The first version generated a video clip on every turn, which was the slow part.
-- One language-model call per turn returns both the reply and the scene, as schema-checked JSON, with the story's facts carried between turns. TinyLlama gave way to Gemma 3 4B, which tells a coherent story in Hebrew and English.
+- One language-model call per turn returns both the reply and the scene, as schema-checked JSON, with the story's facts carried between turns. TinyLlama gave way to Gemma 4 E4B, which tells a coherent story in natural Hebrew and English (Gemma 3 4B remains a lighter option).
 - Speech is fully local: Whisper fine-tuned for Hebrew by ivrit.ai, and BlueTTS for Hebrew and English voices. The dreamer starts with a neutral voice and takes on a gendered one when the story decides.
 - Every service reports a heartbeat; the web service gathers them and shows them on the page, and Docker health checks watch each container.
 - Image generation moved to a separate, optional service that keeps the Dask route to the second machine.
+- The game says plainly what is still loading and keeps the player's words until it is ready, instead of answering in character that it heard nothing. Failed turns never enter the story, and dreams saved with old fallback lines are cleaned when they load.
+- Recordings are decoded with PyAV directly: faster-whisper's own decoder breaks on current PyAV releases.
+- The dreamer's words stream out of the language model as soon as they are written, and its first sentence is voiced on its own, which halves the wait before it speaks.
+- The storyteller is Gemma 4 E4B. On the same seven stories it wrote more natural Hebrew than Gemma 3 4B and answered faster (53 to 64 tokens a second against 30 to 44); Gemma 3 4B stays one line away in `.env`.
+- The dreamer starts talking as soon as its first sentence is written, with a long first sentence cut at its first comma: about 2 to 3 seconds after a typed line.
+- The model reads its worked examples with the player's language last, an answer in the wrong language is asked again before anyone hears it, Hebrew answers agree with the dreamer's gender, and the model lists only the facts each line adds.
+- While an answer is being written, the dream page draws at half rate; at full rate it shared the graphics card so heavily that the storyteller slowed to a crawl after a few turns.
+- The dreamer is easier to see: pale colours are drawn a shade greyer so their shape stays readable, animals turn their side to the viewer, small beings (a bird, a fish) are drawn at least 1.2 m big, mist thins out between the viewer and the dreamer, and snow by night is moonlit blue-grey.
+- More words are understood: whales, robots, owls, queens and princesses of somewhere, travel phrases ("takes you to", "יוצא החוצה") and places said with ב or ל ("בעננים").
 - The old Google service-account key files are gone from the tree. They are still in git history and on GitHub, so delete that key in the Google Cloud console.

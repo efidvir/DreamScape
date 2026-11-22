@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -13,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect, WebSocketState
@@ -23,6 +24,16 @@ logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
 log = logging.getLogger("web")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
+
+class _QuietHealth(logging.Filter):
+    """Heartbeats arrive every few seconds; keep them out of the access log."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/healthz" not in record.getMessage()
+
+
+logging.getLogger("uvicorn.access").addFilter(_QuietHealth())
+
 DIRECTOR_URL = os.environ.get("DIRECTOR_URL", "http://director:9010").rstrip("/")
 VOICE_URL = os.environ.get("VOICE_URL", "http://voice:9020").rstrip("/")
 IMAGERY_URL = os.environ.get("IMAGERY_URL", "").rstrip("/")
@@ -30,14 +41,55 @@ HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "3"))
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STARTED = time.time()
 
-FALLBACK = {
-    "he": "הקול שלך נבלע בערפל... אפשר לומר את זה שוב?",
-    "en": "Your voice dissolves in the mist... could you say that again?",
-}
-NOT_HEARD = {
-    "he": "רק רחש של רוח... לא שמעתי מילים.",
-    "en": "Only a whisper of wind... I heard no words.",
-}
+class NotReady(Exception):
+    """A service is still waking up (downloading or loading its model)."""
+
+
+_SENTENCE_END = re.compile(r"[.!?…]+[\"'”»)]*\s+")
+
+
+HEBREW_LETTER = re.compile(r"[\u0590-\u05ff]")
+LATIN_LETTER = re.compile(r"[A-Za-z]")
+
+
+def written_in(text: str, default: str) -> str:
+    """The language a text is written in, judged by its letters; the voice must read
+    Hebrew words with the Hebrew voice even when the storyteller slipped languages."""
+    he, en = len(HEBREW_LETTER.findall(text or "")), len(LATIN_LETTER.findall(text or ""))
+    if he == en == 0:
+        return default
+    return "he" if he >= en else "en"
+
+
+def split_first_sentence(text: str, min_first: int = 25, min_rest: int = 15) -> list[str]:
+    """The reply in one or two parts: the first sentence that is long enough to stand on its
+    own ("Snow..." alone is too short), then everything after it."""
+    for m in _SENTENCE_END.finditer(text):
+        head, tail = text[:m.end()].strip(), text[m.end():].strip()
+        if len(head) >= min_first:
+            return [head, tail] if len(tail) >= min_rest else [text]
+    return [text]
+
+
+_CLAUSE_END = re.compile(r"[,;:]\s+|\s[-–—]\s+")
+
+
+def split_for_speech(text: str, long_first: int = 45, min_clause: int = 12,
+                     min_rest: int = 15) -> list[str]:
+    """Clips to synthesize one after another. A long first sentence is cut at its first
+    comma as well, so the dreamer starts talking sooner; the rest is synthesized while
+    the first clip plays."""
+    parts = split_first_sentence(text)
+    head = parts[0]
+    if len(head) > long_first:
+        for m in _CLAUSE_END.finditer(head):
+            a, b = head[:m.end()].strip(), head[m.end():].strip()
+            if len(a) >= min_clause:
+                if len(b) >= min_rest:
+                    return [a, b] + parts[1:]
+                break
+    return parts
+
 
 http = httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=3.0))
 
@@ -90,6 +142,13 @@ class Monitor:
     def ok(self, name: str) -> bool:
         return self.status.get(name, {}).get("status") in ("ok", "degraded")
 
+    def ready(self, part: str) -> bool:
+        """director: the storyteller can answer; stt / tts: hearing / speaking works."""
+        if part == "director":
+            return self.status.get("director", {}).get("status") == "ok"
+        voice = self.status.get("voice", {})
+        return (voice.get(part) or {}).get("state") == "ready"
+
     async def _probe(self, name: str, url: str) -> dict:
         t0 = time.perf_counter()
         try:
@@ -119,6 +178,8 @@ class Monitor:
                                   "uptime_s": round(time.time() - STARTED)}
             if changed:
                 await broadcast({"type": "status", "services": self.snapshot()})
+            for c in list(clients):
+                c.kick()
             await asyncio.sleep(HEARTBEAT_S)
 
     def snapshot(self) -> dict:
@@ -152,6 +213,9 @@ class Dreamer:
         self.busy = False
         self.audio_meta: dict | None = None
         self.self_key = ""
+        self.pending: dict | None = None    # the player's last words, waiting for a service to wake up
+        self.next_up = False                # ...or for the dreamer to finish its answer
+        self.clip_log: list[tuple] = []     # (seconds since speak() began, synthesis seconds)
 
     async def send(self, msg: dict):
         if self.ws.client_state != WebSocketState.CONNECTED:
@@ -198,89 +262,235 @@ class Dreamer:
             await self.speak(self.last_reply, self.lang)
 
     # ----------------------------------------------------------------- the turn pipeline
+    async def wait_for(self, part: str, turn: dict):
+        """Keep the player's words and tell the page what we are waiting for. The heartbeat
+        loop runs the turn as soon as the service is ready (see kick)."""
+        self.pending, self.next_up = turn, False
+        await self.send({"type": "waiting", "for": part, "services": monitor.snapshot()})
+
+    def kick(self):
+        p = self.pending
+        if not p or self.busy:
+            return
+        if monitor.ready("stt" if p.get("audio") is not None else "director"):
+            self.pending = None
+            tries = p.pop("tries", 0) + 1
+            if tries > 20:                  # the service says ready but keeps refusing
+                asyncio.create_task(self.send({"type": "notice", "key": "stumbled",
+                                               "detail": "a service kept refusing the turn"}))
+                return
+            asyncio.create_task(self.turn(**p, tries=tries))
+
     async def turn(self, text: str | None = None, audio: bytes | None = None, mime: str = "",
-                   lang_hint: str | None = None):
+                   lang_hint: str | None = None, tries: int = 0):
         if self.busy:
+            # The dreamer is still answering: these words come next (typed words add up).
+            p = self.pending
+            if audio is None and p and p.get("audio") is None and p.get("text"):
+                text = f"{p['text']} {text or ''}".strip()
+            self.pending = {"text": text, "audio": audio, "mime": mime, "lang_hint": lang_hint,
+                            "tries": tries}
+            self.next_up = True
             await self.send({"type": "notice", "key": "busy"})
             return
+        if audio is not None and not monitor.ready("stt"):
+            return await self.wait_for("stt", {"audio": audio, "mime": mime, "lang_hint": lang_hint,
+                                               "tries": tries})
         self.busy = True
         t0 = time.perf_counter()
         timings = {}
+        self.clip_log = []
         try:
             if audio is not None:
                 await self.stage("hearing")
-                text = await self.transcribe(audio, mime, lang_hint)
+                try:
+                    text = await self.transcribe(audio, mime, lang_hint)
+                except NotReady:
+                    return await self.wait_for("stt", {"audio": audio, "mime": mime, "lang_hint": lang_hint,
+                                                       "tries": tries})
                 timings["stt_s"] = round(time.perf_counter() - t0, 2)
+                if text is None:
+                    await self.send({"type": "notice", "key": "stt_down"})
+                    return
                 if not text:
-                    lang = lang_hint if lang_hint in ("he", "en") else self.lang
-                    await self.send({"type": "reply", "text": NOT_HEARD[lang], "lang": lang,
-                                     "fallback": True})
-                    await self.speak(NOT_HEARD[lang], lang)
+                    await self.send({"type": "notice", "key": "not_heard"})
                     return
             text = (text or "").strip()[:1500]
             if not text:
                 return
             await self.send({"type": "transcript", "text": text})
+            if not monitor.ready("director"):
+                return await self.wait_for("director", {"text": text, "lang_hint": lang_hint, "tries": tries})
             await self.stage("dreaming")
             t1 = time.perf_counter()
-            d = await self.ask_director(text, lang_hint)
+            early, first, final, speaking, spoke_at = None, None, None, None, 0.0
+            try:
+                async for ev in self.director_events(text, lang_hint):
+                    kind = ev.get("type")
+                    if kind in ("first", "reply") and early is None:
+                        # The dreamer's words while the storyteller is still writing: its first
+                        # sentence as soon as it is complete, then the rest.
+                        self.lang = ev.get("lang", self.lang)
+                        self.voice = ev.get("voice") or self.voice
+                        words = ev["text"] if kind == "first" else ev["reply"]
+                        if kind == "first" and first is not None:
+                            continue
+                        self.last_reply = words
+                        await self.send({"type": "reply", "text": words, "lang": self.lang})
+                        if first is None:
+                            timings["first_words_s"] = round(time.perf_counter() - t1, 2)
+                            spoke_at = time.perf_counter()
+                            speaking = asyncio.create_task(self.speak(words, self.lang))
+                        elif words.startswith(first):
+                            rest = words[len(first):].strip()
+                            if rest:
+                                speaking = asyncio.create_task(
+                                    self._then_speak(speaking, rest, self.lang))
+                        else:
+                            log.warning("the reply does not start with its spoken first sentence")
+                        if kind == "first":
+                            first = words
+                        else:
+                            early = ev
+                    elif kind == "final":
+                        final = ev
+            except NotReady:
+                if first is None:
+                    return await self.wait_for("director", {"text": text, "lang_hint": lang_hint,
+                                                            "tries": tries})
+                final = {"fallback": True, "error": "the storyteller went away mid-answer"}
+            if early is None and first is not None:
+                early = {"reply": first}
             timings["director_s"] = round(time.perf_counter() - t1, 2)
-            lang = d.get("lang", self.lang)
-            self.lang, self.voice = lang, d.get("voice", self.voice)
-            self.last_reply = d.get("reply", "")
-            if d.get("scene"):
-                await self.send({"type": "scene", "scene": d["scene"], "added": d.get("added", []),
-                                 "changed": d.get("changed", []), "removed": d.get("removed", []),
-                                 "effect": d.get("effect", "none"), "ending": d.get("ending", False)})
-            await self.send({"type": "reply", "text": self.last_reply, "lang": lang,
-                             "fallback": d.get("fallback", False)})
-            if d.get("scene"):
-                self.request_pictures(d["scene"], d.get("added", []), d.get("backdrop", ""))
-            t2 = time.perf_counter()
-            await self.speak(self.last_reply, lang)
-            timings["tts_s"] = round(time.perf_counter() - t2, 2)
+            d = final or {"fallback": True, "error": "the storyteller sent no answer"}
+            if d.get("fallback") and early is None:
+                # The storyteller failed twice; the story is unchanged, so the player can say it again.
+                await self.send({"type": "notice", "key": "stumbled", "detail": d.get("error", "")})
+                return
+            if not d.get("fallback"):
+                lang = d.get("lang", self.lang)
+                self.lang, self.voice = lang, d.get("voice", self.voice)
+                if d.get("scene"):
+                    await self.send({"type": "scene", "scene": d["scene"], "added": d.get("added", []),
+                                     "changed": d.get("changed", []), "removed": d.get("removed", []),
+                                     "effect": d.get("effect", "none"), "ending": d.get("ending", False)})
+                full = d.get("reply", "")
+                if early is None:
+                    self.last_reply = full
+                    await self.send({"type": "reply", "text": full, "lang": lang})
+                    spoke_at = time.perf_counter()
+                    speaking = asyncio.create_task(self.speak(full, lang))
+                elif full != early["reply"] and full.startswith(early["reply"]):
+                    # The grand finale adds a closing line after the words already spoken.
+                    self.last_reply = full
+                    await self.send({"type": "reply", "text": full, "lang": lang})
+                    speaking = asyncio.create_task(
+                        self._then_speak(speaking, full[len(early["reply"]):].strip(), lang))
+                if d.get("scene"):
+                    self.request_pictures(d["scene"], d.get("added", []), d.get("backdrop", ""))
+            first_sound = await speaking if speaking else None
+            if first_sound is not None:
+                timings["tts_s"] = round(first_sound, 2)
+                timings["to_first_sound_s"] = round(spoke_at - t0 + first_sound, 2)
             timings["total_s"] = round(time.perf_counter() - t0, 2)
+            timings["clips"] = self.clip_log[-8:]
             await self.send({"type": "timings", **timings})
         finally:
             self.busy = False
             await self.stage("idle")
+            if self.next_up:                # words that arrived meanwhile go next, at once
+                self.next_up = False
+                self.kick()
 
-    async def transcribe(self, audio: bytes, mime: str, lang_hint: str | None) -> str:
+    async def transcribe(self, audio: bytes, mime: str, lang_hint: str | None) -> str | None:
+        """The words heard, "" for silence, None when hearing failed."""
         files = {"audio": ("speech.webm", audio, mime or "application/octet-stream")}
         form = {"lang": lang_hint or "auto", "prompt": self.last_reply[:200]}
         try:
             r = await http.post(f"{VOICE_URL}/stt", files=files, data=form, timeout=60)
-            r.raise_for_status()
-            return (r.json().get("text") or "").strip()
         except Exception as e:  # noqa: BLE001
-            log.warning("speech-to-text failed: %s", e)
-            await self.send({"type": "notice", "key": "stt_down"})
+            log.warning("speech-to-text unreachable: %s", e)
+            return None
+        if r.status_code == 503:
+            raise NotReady()
+        if r.status_code == 422:            # a recording with no decodable sound
+            log.info("speech-to-text could not decode the recording: %s", r.text[:200])
             return ""
+        if r.status_code != 200:
+            log.warning("speech-to-text failed: %s %s", r.status_code, r.text[:300])
+            return None
+        return (r.json().get("text") or "").strip()
 
-    async def ask_director(self, text: str, lang_hint: str | None) -> dict:
+    async def _then_speak(self, before, text: str, lang: str):
+        first = await before if before else None
+        await self.speak(text, lang)
+        return first
+
+    async def director_events(self, text: str, lang_hint: str | None):
+        """The storyteller's answer as it streams: {"type": "reply"} early, then "final".
+        Raises NotReady when the model is still loading (nothing has been recorded then)."""
+        body = {"session_id": self.session, "text": text, "lang": lang_hint,
+                "pictures": monitor.ok("imagery")}
+        said = False
         try:
-            r = await http.post(f"{DIRECTOR_URL}/turn",
-                                json={"session_id": self.session, "text": text, "lang": lang_hint},
-                                timeout=150)
-            r.raise_for_status()
-            return r.json()
+            async with http.stream("POST", f"{DIRECTOR_URL}/turn/stream", json=body, timeout=200) as r:
+                if r.status_code == 503:
+                    raise NotReady()
+                if r.status_code != 200:
+                    log.warning("director failed: %s %s", r.status_code, (await r.aread())[:300])
+                    yield {"type": "final", "fallback": True, "error": f"storyteller error {r.status_code}"}
+                    return
+                async for line in r.aiter_lines():
+                    if line.strip():
+                        said = True
+                        yield json.loads(line)
+        except NotReady:
+            raise
+        except httpx.TransportError as e:
+            if not said:
+                # The storyteller went away before a word (a restart, say). It records a turn
+                # only once it is complete, so the player's words wait for it to come back.
+                log.warning("director went away mid-turn (%s); waiting for it", type(e).__name__)
+                monitor.status["director"] = {**monitor.status.get("director", {}),
+                                              "status": "down", "detail": "restarting"}
+                raise NotReady() from e
+            log.warning("director stream broke: %s: %s", type(e).__name__, e)
+            yield {"type": "final", "fallback": True,
+                   "error": f"storyteller unreachable ({type(e).__name__})"}
         except Exception as e:  # noqa: BLE001
-            log.warning("director failed: %s", e)
-            lang = "he" if any("֐" <= ch <= "׿" for ch in text) else "en"
-            return {"reply": FALLBACK[lang], "lang": lang, "fallback": True, "scene": None}
+            log.warning("director stream broke: %s: %s", type(e).__name__, e)
+            yield {"type": "final", "fallback": True,
+                   "error": f"storyteller unreachable ({type(e).__name__})"}
 
-    async def speak(self, text: str, lang: str):
+    async def speak(self, text: str, lang: str) -> float | None:
+        """Voice the reply. The first sentence is sent on its own so the dreamer starts
+        talking while the rest is still being synthesized. Returns seconds to first sound."""
         if not text:
-            return
-        try:
-            r = await http.post(f"{VOICE_URL}/tts",
-                                json={"text": text, "lang": lang, "voice": self.voice}, timeout=60)
-            r.raise_for_status()
-            url = media.put(r.content, "audio/wav", "wav")
-            await self.send({"type": "audio", "url": url, "text": text})
-        except Exception as e:  # noqa: BLE001 - the browser speaks instead
-            log.info("text-to-speech unavailable (%s); browser voice fallback", e)
+            return None
+        lang = written_in(text, lang)
+        if not monitor.ready("tts"):
             await self.send({"type": "speak", "text": text, "lang": lang, "voice": self.voice})
+            return None
+        t0 = time.perf_counter()
+        first = None
+        for part in split_for_speech(text):
+            try:
+                body = {"text": part, "lang": lang, "voice": self.voice}
+                try:
+                    r = await http.post(f"{VOICE_URL}/tts", json=body, timeout=60)
+                except httpx.TransportError:    # a pooled connection the server had closed
+                    r = await http.post(f"{VOICE_URL}/tts", json=body, timeout=60)
+                r.raise_for_status()
+                url = media.put(r.content, "audio/wav", "wav")
+                await self.send({"type": "audio", "url": url, "text": part})
+                first = first if first is not None else time.perf_counter() - t0
+                self.clip_log.append((round(time.perf_counter() - t0, 2),
+                                      r.headers.get("X-Synth-Seconds", "")))
+            except Exception as e:  # noqa: BLE001 - the browser speaks instead
+                log.warning("text-to-speech failed (%s: %s); browser voice fallback",
+                            type(e).__name__, e)
+                await self.send({"type": "speak", "text": part, "lang": lang, "voice": self.voice})
+        return first
 
     def request_pictures(self, scene: dict, added: list, backdrop: str = "", everything: bool = False):
         """With the imagery service up, every new thing (and the dreamer's new form) gets a
@@ -326,6 +536,16 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="DreamScape web", lifespan=lifespan)
 
 
+@app.middleware("http")
+async def revalidate_page_files(request, call_next):
+    """The page's files change while the game runs (live code): make the browser check
+    for a newer version on every load instead of keeping a stale copy."""
+    response = await call_next(request)
+    if not request.url.path.startswith("/media/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 @app.get("/healthz")
 async def healthz():
     return {"service": "web", "status": "ok", "clients": len(clients),
@@ -335,6 +555,58 @@ async def healthz():
 @app.get("/api/status")
 async def status():
     return JSONResponse(monitor.snapshot())
+
+
+@app.api_route("/api/debug/director/{path:path}", methods=["GET", "POST"])
+async def debug_director(path: str, request: Request):
+    """Pass-through to the director's /debug/* endpoints: model trials and downloads."""
+    if path.split("/")[0] not in ("pull", "loaded", "turn", "recent", "unload", "release", "model",
+                                    "models", "threads"):
+        return JSONResponse({"error": "unknown debug path"}, status_code=404)
+    url = f"{DIRECTOR_URL}/debug/{path}"
+    try:
+        if request.method == "GET":
+            r = await http.get(url, timeout=10)
+        else:
+            r = await http.post(url, content=await request.body(), timeout=300,
+                                headers={"content-type": "application/json"})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    return Response(r.content, status_code=r.status_code,
+                    media_type=r.headers.get("content-type", "application/json"))
+
+
+@app.get("/api/debug/tts")
+async def debug_tts(text: str, lang: str = "he", voice: str = "neutral"):
+    """Time one text-to-speech call (for tuning the voice on a live machine)."""
+    t0 = time.perf_counter()
+    try:
+        r = await http.post(f"{VOICE_URL}/tts", json={"text": text[:600], "lang": lang, "voice": voice},
+                            timeout=120)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    return {"status": r.status_code, "synth_s": r.headers.get("X-Synth-Seconds"),
+            "wall_s": round(time.perf_counter() - t0, 3), "bytes": len(r.content)}
+
+
+@app.get("/api/debug/gpu")
+async def debug_gpu():
+    """Graphics card memory, load, clock and heat, as the voice service sees them."""
+    try:
+        r = await http.get(f"{VOICE_URL}/debug/gpu", timeout=10)
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+
+@app.get("/api/debug/recent")
+async def debug_recent():
+    """The storyteller's last raw answers (for tuning the game on a live machine)."""
+    try:
+        r = await http.get(f"{DIRECTOR_URL}/debug/recent", timeout=5)
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
 
 
 @app.get("/media/{key}")

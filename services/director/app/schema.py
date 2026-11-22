@@ -18,7 +18,7 @@ def _enum(values, extra=()):
     return {"type": "string", "enum": list(extra) + list(values)}
 
 
-def turn_schema() -> dict:
+def turn_schema(pictures: bool = True) -> dict:
     thing = {
         "type": "object",
         "properties": {
@@ -44,10 +44,8 @@ def turn_schema() -> dict:
         },
         "required": ["id", "color", "size", "where", "motion"],
     }
-    return {
-        "type": "object",
-        "properties": {
-            "facts": {"type": "array", "items": {"type": "string"}, "maxItems": 4},
+    props = {
+            "facts": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
             "reply": {"type": "string"},
             "voice": _enum(vocab.VOICES, extra=["same"]),
             "self": {
@@ -75,10 +73,13 @@ def turn_schema() -> dict:
             "clarity": {"type": "number"},
             "backdrop": {"type": "string"},
             "ending": {"type": "boolean"},
-        },
-        "required": ["facts", "reply", "voice", "self", "setting", "add", "change",
-                     "remove", "effect", "clarity", "backdrop", "ending"],
     }
+    # Facts and voice, then the spoken reply, then the scene (see prompt.ORDER).
+    order = ["facts", "voice", "reply", "self", "setting", "add", "change", "remove", "effect",
+             "clarity", "backdrop", "ending"]
+    if not pictures:
+        order.remove("backdrop")
+    return {"type": "object", "properties": {k: props[k] for k in order}, "required": order}
 
 
 # --------------------------------------------------------------------------- parsing
@@ -147,7 +148,7 @@ def parse_turn(raw: dict) -> TurnOutput:
     out = TurnOutput()
     out.reply = _str(raw.get("reply"), 600)
     facts = raw.get("facts") if isinstance(raw.get("facts"), list) else []
-    out.facts = [f for f in (_str(x, 160) for x in facts) if f][:4]
+    out.facts = [f for f in (_str(x, 160) for x in facts) if f][:3]
     out.voice = _pick(raw.get("voice"), vocab.VOICES + ["same"], "same")
 
     me = raw.get("self") if isinstance(raw.get("self"), dict) else {}

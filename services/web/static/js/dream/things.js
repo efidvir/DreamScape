@@ -82,20 +82,22 @@ function dustTrail(c, n = 110, size = 0.17) {
 // ------------------------------------------------------------------ fairy, butterfly, fireflies
 function fairy(spec, r, place) {
   const s = (SIZE[spec.size] || 1) * 3.4;
-  const c = color(spec.color, '#bfe6ff');
+  const c = color(spec.color, '#b8a4ff');
   return manyOf(spec, r, place, (i) => {
     const g = new THREE.Group(); const body = new THREE.Group(); body.scale.setScalar(s); g.add(body);
-    const skin = solid('#fff4e6', { glow: 0.9, emissive: '#ffe9cf' });
+    const skin = solid('#fff4e6', { glow: 0.35, emissive: '#ffe9cf' });
     const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.03, 0.1, 4, 8), skin); torso.position.y = 0;
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.04, 12, 8), skin); head.position.y = 0.1;
-    const dress = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.12, 10, 1, true), solid(c, { glow: 0.9, side: THREE.DoubleSide }));
+    const dress = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.12, 10, 1, true), solid(c, { glow: 0.5, side: THREE.DoubleSide }));
     dress.position.y = -0.04;
     body.add(torso, head, dress);
     const wings = [];
     for (const [side, up, w, h] of [[1, 0.06, 0.3, 0.22], [-1, 0.06, 0.3, 0.22], [1, -0.03, 0.2, 0.14], [-1, -0.03, 0.2, 0.14]]) {
-      const wg = wing('fairy', c, w, h); wg.position.set(0, up, -0.02); wg.scale.x = side; body.add(wg); wings.push(wg);
+      // Soft, tinted wings: added light from four large wings turned the fairy into a white blot.
+      const wg = wing('fairy', c, w, h, false); wg.material.opacity = 0.75;
+      wg.position.set(0, up, -0.02); wg.scale.x = side; body.add(wg); wings.push(wg);
     }
-    const halo = glowSprite(c, 0.5 * s, 0.22); const core = glowSprite('#ffffff', 0.08 * s, 0.6);
+    const halo = glowSprite(c, 0.5 * s, 0.14); const core = glowSprite('#ffffff', 0.06 * s, 0.45);
     g.add(halo, core);
     const light = new THREE.PointLight(c, 1.6, 4.5 * s, 1.5); g.add(light);
     const trail = dustTrail(c);
@@ -105,7 +107,7 @@ function fairy(spec, r, place) {
       update: (t, dt) => {
         const f = 0.9 + 0.6 * Math.sin(t * 34 + phase);
         wings.forEach((wg, k) => { wg.rotation.y = (k % 2 ? -1 : 1) * f * (k < 2 ? 0.9 : 0.75); });
-        halo.material.opacity = 0.16 + 0.08 * Math.sin(t * 3 + phase);
+        halo.material.opacity = 0.1 + 0.05 * Math.sin(t * 3 + phase);
         trail.follow(g, t, dt);
       },
     };
@@ -281,7 +283,7 @@ function dragon(spec, r, place) {
   const c = color(spec.color, '#5a2fb0');
   const root = new THREE.Group(); const members = []; const world = [];
   const head = new THREE.Group(); head.position.copy(place(0)); root.add(head); members.push(head);
-  const mat = solid(c, { glow: 0.45, roughness: 0.55, metalness: 0.2 });
+  const mat = solid(c, { glow: 0.35, roughness: 0.55, metalness: 0.2 });
   const skull = new THREE.Mesh(new THREE.SphereGeometry(0.16 * s, 12, 10), mat); skull.scale.set(0.85, 0.7, 1.4); head.add(skull);
   const eyeM = solid('#ffd84a', { glow: 2.2 });
   for (const x of [1, -1]) {
@@ -296,11 +298,11 @@ function dragon(spec, r, place) {
   }
   const wingG = new THREE.BufferGeometry().setFromPoints([v3(0, 0, 0.2 * s), v3(1.4 * s, 0.3 * s, -0.1 * s), v3(0.9 * s, 0, -0.6 * s), v3(0, 0, -0.3 * s)]);
   wingG.setIndex([0, 1, 2, 0, 2, 3]); wingG.computeVertexNormals();
-  const wingM = solid(c.clone().offsetHSL(0.03, 0, 0.12), { glow: 0.55, side: THREE.DoubleSide });
+  const wingM = solid(c.clone().offsetHSL(0.03, 0, 0.06), { glow: 0.3, side: THREE.DoubleSide });
   wingM.opacity = 0.92;
   const wl = new THREE.Mesh(wingG, wingM), wr = new THREE.Mesh(wingG, wingM); wr.scale.x = -1;
   const wings = new THREE.Group(); wings.add(wl, wr); world.push(wings);
-  const glow = glowSprite(c, 2.4 * s, 0.25); world.push(glow);
+  const glow = glowSprite(c, 1.4 * s, 0.12); world.push(glow);
   const hist = []; const wp = new THREE.Vector3();
   const update = (t) => {
     head.getWorldPosition(wp);

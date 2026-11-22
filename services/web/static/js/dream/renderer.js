@@ -59,11 +59,13 @@ const DreamShader = {
 export class DreamRenderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+    // The discrete GPU belongs to the storyteller and the voice; on a laptop with two GPUs the
+    // soft particle dream runs fine on the integrated one.
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'low-power' });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.pixelRatio = Math.min(window.devicePixelRatio || 1, 1);   // soft particles need no more
     this.renderer.setPixelRatio(this.pixelRatio);
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(55, 16 / 9, 0.1, 1200);
@@ -117,7 +119,12 @@ export class DreamRenderer {
 
   // ------------------------------------------------------------------ loop
   start(onFrame) {
+    let last = 0;
     this.renderer.setAnimationLoop((now) => {
+      // While the storyteller writes its answer, half the frames are enough: the GPU is its.
+      const gap = this.world && this.world.thinking ? 1000 / 30 - 2 : 0;
+      if (now - last < gap) return;
+      last = now;
       this.timer.update(now);
       const dt = Math.min(this.maxDt, this.timer.getDelta());
       this.elapsed += dt;
@@ -125,7 +132,7 @@ export class DreamRenderer {
       this.step(t, dt);
       onFrame(t, dt);
       this.composer.render(dt);
-      this.watchSpeed(dt);
+      this.watchSpeed(dt, gap / 1000);
     });
   }
 
@@ -175,9 +182,10 @@ export class DreamRenderer {
   }
 
   // Keep it smooth on weaker GPUs: lower resolution, then drop depth-of-field.
-  watchSpeed(dt) {
+  watchSpeed(dt, gap = 0) {
     this.frames++;
-    if (dt > 1 / 32) this.slowFor += dt; else this.slowFor = Math.max(0, this.slowFor - dt * 0.5);
+    const slow = dt > Math.max(1 / 32, gap * 1.5);
+    if (slow) this.slowFor += dt; else this.slowFor = Math.max(0, this.slowFor - dt * 0.5);
     if (this.slowFor > 4 && this.frames > 240) {
       this.slowFor = 0;
       if (this.pixelRatio > 0.75) { this.pixelRatio = Math.max(0.75, this.pixelRatio - 0.25); this.resize(); }

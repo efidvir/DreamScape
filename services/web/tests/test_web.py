@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -10,32 +11,78 @@ from app import main
 ROOT = Path(__file__).resolve().parents[2]
 
 
+STATE = {"director": "ok", "stt_text": "you are a fairy", "turn": None}
+
+
+def ndjson(final: dict) -> httpx.Response:
+    """The director's streamed answer: the words first (unless it failed), then the scene."""
+    lines = []
+    if STATE.get("first") and not final.get("fallback"):
+        lines.append({"type": "first", "text": STATE["first"], "lang": final.get("lang", "en"),
+                      "voice": final.get("voice", "neutral")})
+    if not final.get("fallback"):
+        lines.append({"type": "reply", "reply": final["reply"], "lang": final.get("lang", "en"),
+                      "voice": final.get("voice", "neutral")})
+    lines.append({"type": "final", **final})
+    return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines).encode(),
+                          headers={"content-type": "application/x-ndjson"})
+
+
 def fake_backend(request: httpx.Request) -> httpx.Response:
-    path = request.url.path
+    path, host = request.url.path, request.url.host
     if path == "/healthz":
-        return httpx.Response(200, json={"status": "ok", "detail": "fake"})
+        if host == "voice":
+            return httpx.Response(200, json={"status": "ok", "stt": {"state": "ready"},
+                                             "tts": {"state": "ready"}})
+        return httpx.Response(200, json={"status": STATE["director"], "detail": "fake"})
     if path in ("/session", "/reset"):
         return httpx.Response(200, json={"reply": "Where am I?", "lang": "en", "voice": "neutral",
                                          "resumed": False, "scene": {"setting": {"kind": "void"}, "things": []}})
-    if path == "/turn":
-        return httpx.Response(200, json={"reply": "A fairy... yes.", "lang": "en", "voice": "female",
-                                         "scene": {"setting": {"kind": "forest"}, "things": [{"id": "t", "kind": "tree"}]},
-                                         "added": ["t"], "changed": [], "removed": [], "effect": "sparkle"})
+    if path in ("/turn", "/turn/stream"):
+        if STATE.get("drop"):                          # the director restarts mid-turn
+            STATE["drop"] -= 1
+            raise httpx.RemoteProtocolError("peer closed connection", request=request)
+        if STATE["director"] != "ok":
+            return httpx.Response(503, json={"detail": {"state": "pulling"}})
+        final = STATE["turn"] or {"reply": "A fairy... yes.", "lang": "en", "voice": "female",
+                                  "scene": {"setting": {"kind": "forest"}, "things": [{"id": "t", "kind": "tree"}]},
+                                  "added": ["t"], "changed": [], "removed": [], "effect": "sparkle"}
+        if path == "/turn":
+            return httpx.Response(200, json=final)
+        return ndjson(final)
     if path == "/tts":
         return httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
     if path == "/stt":
-        return httpx.Response(200, json={"text": "you are a fairy"})
+        return httpx.Response(200, json={"text": STATE["stt_text"]})
     return httpx.Response(404)
 
 
 @pytest.fixture
 def client(monkeypatch):
+    STATE.update(director="ok", stt_text="you are a fairy", turn=None, drop=0, first=None)
     monkeypatch.setattr(main, "http", httpx.AsyncClient(transport=httpx.MockTransport(fake_backend)))
+    monkeypatch.setattr(main, "HEARTBEAT_S", 0.05)
     with TestClient(main.app) as c:
+        import time
+        for _ in range(100):           # wait for the first heartbeat
+            if main.monitor.ready("director") and main.monitor.ready("stt"):
+                break
+            time.sleep(0.02)
         yield c
 
 
-def _until(ws, kind, limit=12):
+def _collect(ws, last, limit=60):
+    """Every message up to and including the first of type `last`."""
+    out = []
+    for _ in range(limit):
+        m = ws.receive_json()
+        out.append(m)
+        if m["type"] == last:
+            return out
+    raise AssertionError(f"no {last} in {[m['type'] for m in out]}")
+
+
+def _until(ws, kind, limit=40):
     seen = []
     for _ in range(limit):
         m = ws.receive_json()
@@ -51,9 +98,13 @@ def test_typed_turn_flows_to_scene_reply_and_voice(client):
         assert _until(ws, "session")["reply"] == "Where am I?"
         _until(ws, "audio")
         ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
-        assert _until(ws, "scene")["scene"]["setting"]["kind"] == "forest"
-        assert _until(ws, "reply")["text"] == "A fairy... yes."
-        audio = _until(ws, "audio")
+        got = _collect(ws, "timings")
+        kinds = [m["type"] for m in got]
+        # the words come first and the dreamer starts talking; the scene follows
+        assert kinds.index("reply") < kinds.index("scene")
+        assert next(m for m in got if m["type"] == "reply")["text"] == "A fairy... yes."
+        assert next(m for m in got if m["type"] == "scene")["scene"]["setting"]["kind"] == "forest"
+        audio = next(m for m in got if m["type"] == "audio")
         assert client.get(audio["url"]).headers["content-type"] == "audio/wav"
 
 
@@ -65,6 +116,31 @@ def test_spoken_turn_is_transcribed_first(client):
         ws.send_bytes(b"\x1aE\xdf\xa3fake-webm")
         assert _until(ws, "transcript")["text"] == "you are a fairy"
         _until(ws, "reply")
+
+
+def test_words_wait_for_a_sleeping_storyteller_and_then_flow(client):
+    STATE["director"] = "loading"
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef789", "lang": "en"})
+        _until(ws, "session")
+        ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+        assert _until(ws, "waiting")["for"] == "director"
+        STATE["director"] = "ok"                       # the model finished loading
+        assert _until(ws, "reply")["text"] == "A fairy... yes."
+
+
+def test_silence_and_failures_become_notices(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef999", "lang": "en"})
+        _until(ws, "audio")
+        STATE["stt_text"] = ""
+        ws.send_json({"type": "audio", "mime": "audio/webm", "lang": "en"})
+        ws.send_bytes(b"\x1aE\xdf\xa3fake-webm")
+        assert _until(ws, "notice")["key"] == "not_heard"
+        STATE["turn"] = {"reply": "Your voice dissolves in the mist...", "fallback": True, "error": "bad json"}
+        ws.send_json({"type": "text", "text": "fly to the moon", "lang": None})
+        n = _until(ws, "notice")
+        assert n["key"] == "stumbled" and n["detail"] == "bad json"
 
 
 def test_page_and_vendored_three_are_served(client):
@@ -96,8 +172,8 @@ def test_pictures_are_requested_for_new_things_and_the_dreamer(client, monkeypat
         if request.url.path == "/imagine":
             asked.append(request.read().decode())
             return httpx.Response(200, content=b"\x89PNG fake", headers={"content-type": "image/png"})
-        if request.url.path == "/turn":
-            return httpx.Response(200, json={
+        if request.url.path == "/turn/stream":
+            return ndjson({
                 "reply": "A cheese!", "lang": "en", "voice": "female", "backdrop": "",
                 "scene": {"setting": {"kind": "moon"}, "self": {"form": "fairy", "label": "silver fairy", "color": "silver"},
                           "things": [{"id": "cheese", "kind": "cheese", "label": "glowing cheese", "color": "gold", "count": 1},
@@ -115,3 +191,92 @@ def test_pictures_are_requested_for_new_things_and_the_dreamer(client, monkeypat
     assert any("gold cheese" in a or "glowing cheese" in a for a in asked)
     assert not any('"trees"' in a for a in asked)          # groves stay procedural
     main.monitor.status["imagery"] = {"status": "off"}
+
+
+def test_first_sentence_is_split_off_when_long_enough():
+    assert main.split_first_sentence("Snow... it feels so cold on my fur. A fox? But why this place?") == [
+        "Snow... it feels so cold on my fur.", "A fox? But why this place?"]
+    assert main.split_first_sentence("קול... שמעתי קול בתוך החושך. מי שם? ומי... מי אני?") == [
+        "קול... שמעתי קול בתוך החושך.", "מי שם? ומי... מי אני?"]
+    assert main.split_first_sentence("Short. Tiny.") == ["Short. Tiny."]
+    assert main.split_first_sentence("One long sentence without any ending at all") == [
+        "One long sentence without any ending at all"]
+
+
+def test_long_reply_arrives_as_two_clips(client):
+    STATE["turn"] = {"reply": "Snow... it feels so cold on my fur. A fox? But why this place?",
+                     "lang": "en", "voice": "female", "scene": None}
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef555", "lang": "en"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "you are a fox", "lang": None})
+        first = _until(ws, "audio")
+        second = _until(ws, "audio")
+        assert first["text"] == "Snow... it feels so cold on my fur." and second["text"].startswith("A fox?")
+        assert _until(ws, "timings")["to_first_sound_s"] >= 0
+
+
+def test_a_storyteller_restart_mid_turn_only_delays_the_answer(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef321", "lang": "en"})
+        _until(ws, "session")
+        STATE["drop"] = 1
+        ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+        assert _until(ws, "waiting")["for"] == "director"
+        assert _until(ws, "reply")["text"] == "A fairy... yes."
+
+
+def test_first_sentence_is_spoken_before_the_rest_is_written(client):
+    STATE["first"] = "A fairy of silver light, yes."
+    STATE["turn"] = {"reply": "A fairy of silver light, yes. My wings hum softly in the dark.",
+                     "lang": "en", "voice": "female", "scene": {"setting": {"kind": "forest"}, "things": []},
+                     "added": [], "changed": [], "removed": [], "effect": "sparkle"}
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef654", "lang": "en"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+        got = _collect(ws, "timings")
+        replies = [m["text"] for m in got if m["type"] == "reply"]
+        clips = [m["text"] for m in got if m["type"] == "audio"]
+        assert replies == [STATE["first"], STATE["turn"]["reply"]]
+        assert clips == ["A fairy of silver light, yes.", "My wings hum softly in the dark."]
+
+
+def test_a_long_first_sentence_is_cut_at_its_first_comma():
+    he = "דרקון כחול נוחת לידי, והכתר שלו משתקף בעיניים שלי. אני מרגישה כוח חדש."
+    assert main.split_for_speech(he) == ["דרקון כחול נוחת לידי,", "והכתר שלו משתקף בעיניים שלי.",
+                                         "אני מרגישה כוח חדש."]
+    short = "A fairy, yes. My wings hum softly in the dark night."
+    assert main.split_for_speech(short) == [short]
+    too_short_a_clause = "Snow falls, and the long night is quiet and cold and white."
+    assert main.split_for_speech(too_short_a_clause) == [too_short_a_clause]
+
+
+def test_words_said_while_the_dreamer_answers_come_next(client):
+    import time
+    seen = []
+    real = main.Dreamer.director_events
+
+    async def slow(self, text, lang_hint):
+        seen.append(text)
+        if len(seen) == 1:
+            import asyncio
+            await asyncio.sleep(0.3)            # the first answer is still being written
+        async for ev in real(self, text, lang_hint):
+            yield ev
+
+    main.Dreamer.director_events = slow
+    try:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "hello", "session": "abcdef777", "lang": "en"})
+            _until(ws, "audio")
+            ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+            time.sleep(0.05)
+            ws.send_json({"type": "text", "text": "fly to", "lang": None})
+            ws.send_json({"type": "text", "text": "the moon", "lang": None})
+            assert _until(ws, "notice")["key"] == "busy"
+            _until(ws, "timings")
+            _until(ws, "timings")
+    finally:
+        main.Dreamer.director_events = real
+    assert seen == ["you are a fairy", "fly to the moon"]

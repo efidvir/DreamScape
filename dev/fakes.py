@@ -8,6 +8,7 @@ city, cave, underwater, house, portal, unicorn, flowers, mushrooms, crystals, gh
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import math
@@ -15,7 +16,7 @@ import re
 import struct
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 NONE_SELF = {"form": "same", "label": "", "color": ""}
 SAME_SET = {"kind": "same", "time": "same", "weather": "same"}
@@ -118,17 +119,43 @@ async def show(req: Request):
     return {"model": (await req.json()).get("model")}
 
 
+LOADED: set[str] = set()
+
+
 @ollama.post("/api/generate")
-async def generate():
+async def generate(req: Request):
+    body = await req.json()
+    if body.get("keep_alive") == 0:
+        LOADED.discard(body.get("model", ""))
+    elif body.get("model"):
+        LOADED.add(body["model"])
     return {"done": True}
+
+
+@ollama.get("/api/ps")
+async def ps():
+    return {"models": [{"name": m, "model": m} for m in sorted(LOADED)]}
 
 
 @ollama.post("/api/chat")
 async def chat(req: Request):
     body = await req.json()
     out = _story_reply(body.get("messages", []))
-    return {"message": {"role": "assistant", "content": json.dumps(out, ensure_ascii=False)},
-            "done": True, "eval_count": 180, "eval_duration": 2_000_000_000}
+    order = ["facts", "voice", "reply"]            # the real model writes the words early
+    text = json.dumps({**{k: out[k] for k in order if k in out}, **out}, ensure_ascii=False)
+    if not body.get("stream"):
+        return {"message": {"role": "assistant", "content": text},
+                "done": True, "eval_count": 180, "eval_duration": 2_000_000_000}
+
+    async def pieces():
+        for i in range(0, len(text), 24):
+            yield json.dumps({"message": {"role": "assistant", "content": text[i:i + 24]},
+                              "done": False}) + "\n"
+            await asyncio.sleep(0.01)
+        yield json.dumps({"message": {"role": "assistant", "content": ""}, "done": True,
+                          "eval_count": 180, "eval_duration": 2_000_000_000}) + "\n"
+
+    return StreamingResponse(pieces(), media_type="application/x-ndjson")
 
 
 # --------------------------------------------------------------------------- fake voice

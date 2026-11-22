@@ -3,7 +3,8 @@
 export class Sound {
   constructor() {
     this.ctx = null; this.level = 0; this.micLevel = 0; this.muted = false;
-    this.queue = []; this.playing = null; this.onLevel = () => {};
+    this.queue = []; this.playing = null; this.onLevel = () => {}; this.peak = 0;
+    if ('speechSynthesis' in window) speechSynthesis.getVoices();   // starts loading the voice list
   }
 
   unlock() {
@@ -32,7 +33,9 @@ export class Sound {
       if (this.mic) {
         this.mic.analyser.getByteTimeDomainData(this.mic.buf);
         let s = 0; for (let i = 0; i < this.mic.buf.length; i++) { const v = (this.mic.buf[i] - 128) / 128; s += v * v; }
-        this.micLevel += (Math.min(1, Math.sqrt(s / this.mic.buf.length) * 5) - this.micLevel) * 0.4;
+        const raw = Math.min(1, Math.sqrt(s / this.mic.buf.length) * 5);
+        this.peak = Math.max(this.peak, raw);
+        this.micLevel += (raw - this.micLevel) * 0.4;
       } else this.micLevel *= 0.85;
       this.onLevel(this.level, this.micLevel);
       requestAnimationFrame(tick);
@@ -41,13 +44,19 @@ export class Sound {
   }
 
   // ------------------------------------------------------------------ the dreamer's voice
-  async play(url) {
+  // Clips play in the order they arrive, even when a later, shorter one decodes first.
+  play(url) {
     this.unlock();
-    try {
-      const data = await (await fetch(url)).arrayBuffer();
-      const audio = await this.ctx.decodeAudioData(data);
-      this.queue.push(audio); if (!this.playing) this._next();
-    } catch (e) { console.warn('could not play voice', e); }
+    const gen = this.gen || 0;
+    const audio = fetch(url).then((r) => r.arrayBuffer()).then((data) => this.ctx.decodeAudioData(data));
+    this.loading = (this.loading || Promise.resolve()).then(async () => {
+      try {
+        const clip = await audio;
+        if ((this.gen || 0) !== gen) return;          // the player interrupted: drop the rest
+        this.queue.push(clip); if (!this.playing) this._next();
+      } catch (e) { console.warn('could not play voice', e); }
+    });
+    return this.loading;
   }
 
   _next() {
@@ -58,18 +67,21 @@ export class Sound {
     src.start();
   }
 
-  stopVoice() { this.queue = []; if (this.playing) { try { this.playing.stop(); } catch { /* already stopped */ } } this.playing = null; speechSynthesis.cancel(); }
+  stopVoice() { this.gen = (this.gen || 0) + 1; this.queue = []; if (this.playing) { try { this.playing.stop(); } catch { /* already stopped */ } } this.playing = null; speechSynthesis.cancel(); }
 
-  // Fallback when the voice service is down: the browser speaks.
+  // Fallback while the voice service is loading: the browser speaks, but only with a voice
+  // that knows the language (an English voice reading Hebrew is worse than silence).
   speakFallback(text, lang, voice) {
-    if (!('speechSynthesis' in window) || this.muted) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang === 'he' ? 'he-IL' : 'en-US'; u.rate = 0.92; u.pitch = voice === 'male' ? 0.85 : voice === 'female' ? 1.15 : 1;
+    if (!('speechSynthesis' in window) || this.muted) return false;
     const voices = speechSynthesis.getVoices().filter((v) => v.lang && v.lang.toLowerCase().startsWith(lang === 'he' ? 'he' : 'en'));
-    const local = voices.find((v) => v.localService) || voices[0]; if (local) u.voice = local;
+    const local = voices.find((v) => v.localService) || voices[0];
+    if (!local) return false;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = local.lang; u.voice = local; u.rate = 0.92; u.pitch = voice === 'male' ? 0.85 : voice === 'female' ? 1.15 : 1;
     let fake = 0; const iv = setInterval(() => { fake = 0.3 + 0.3 * Math.random(); this.level = fake; }, 120);
     u.onend = () => { clearInterval(iv); this.level = 0; };
     speechSynthesis.speak(u);
+    return true;
   }
 
   // ------------------------------------------------------------------ microphone
@@ -83,7 +95,7 @@ export class Sound {
     const analyser = this.ctx.createAnalyser(); analyser.fftSize = 512; src.connect(analyser);
     this.mic = { src, analyser, buf: new Uint8Array(512) };
     const mime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4'].find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
-    this.chunks = []; this.mime = mime || 'audio/webm';
+    this.chunks = []; this.mime = mime || 'audio/webm'; this.peak = 0;
     this.rec = new MediaRecorder(this.stream, mime ? { mimeType: mime, audioBitsPerSecond: 48000 } : undefined);
     this.rec.ondataavailable = (e) => { if (e.data && e.data.size) this.chunks.push(e.data); };
     this.startedAt = performance.now();

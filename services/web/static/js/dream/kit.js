@@ -51,7 +51,12 @@ export function color(value, fallback = '#ffffff') {
   const aliases = { silver: '#c8d4e6', gold: '#ffcf5a', golden: '#ffcf5a', darkgreen: '#1e4d2b',
     turquoise: '#40e0d0', rainbow: '#ff9ad5', glowing: '#fff2c4', transparent: '#dfefff',
     bronze: '#cd7f32', copper: '#c87533', ivory: '#fffff0', pearl: '#f0eadf', emerald: '#2ecc71',
-    ruby: '#e0115f', sapphire: '#0f52ba', amethyst: '#9966cc', crimson: '#dc143c' };
+    ruby: '#e0115f', sapphire: '#0f52ba', amethyst: '#9966cc', crimson: '#dc143c',
+    // Plain colour words, as dream colours: pure blue or black would vanish as particles.
+    blue: '#5b8cff', darkblue: '#3a5bd0', lightblue: '#9cc8ff', red: '#ff5a5a', darkred: '#b8333a',
+    green: '#58d68d', yellow: '#ffe066', purple: '#b07cff', violet: '#b07cff', pink: '#ff9ad5',
+    orange: '#ffa24c', black: '#33334a', brown: '#a8744a', grey: '#a9b2c0', gray: '#a9b2c0',
+    navy: '#3a4f9e', indigo: '#6a5cff', magenta: '#ff5ad1', cyan: '#5ee7ff' };
   const hex = aliases[v] || v;
   try {
     if (/^#?[0-9a-f]{3}([0-9a-f]{3})?$/.test(hex)) return _probe.set(hex.startsWith('#') ? hex : '#' + hex).clone();

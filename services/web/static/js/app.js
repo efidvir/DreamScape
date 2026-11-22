@@ -28,7 +28,8 @@ let session = localStorage.getItem('dreamscape.session');
 if (!session) { session = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replace(/[^A-Za-z0-9-]/g, ''); localStorage.setItem('dreamscape.session', session); }
 const net = new Net(session, chosenLang);
 
-net.on('status', (m) => ui.setStatus(m.services))
+net.on('status', (m) => { ui.setStatus(m.services); ui.waking(m.services); })
+  .on('waiting', (m) => { ui.waiting(m.for); if (m.services) ui.waking(m.services); })
   .on('link', (m) => { if (!m.up) ui.notice('link'); })
   .on('session', (m) => {
     if (m.scene) world.applyScene(m.scene, { initial: true });
@@ -37,19 +38,27 @@ net.on('status', (m) => ui.setStatus(m.services))
     if (m.reply) ui.dreamer(m.reply);
   })
   .on('transcript', (m) => ui.player(m.text))
-  .on('stage', (m) => { ui.stage(m.stage); world.setThinking(m.stage === 'dreaming' || m.stage === 'hearing'); })
+  .on('stage', (m) => { ui.stage(m.stage); world.setThinking(m.stage === 'dreaming' || m.stage === 'hearing'); if (m.stage === 'dreaming') ui.clearWaiting(); })
   .on('scene', (m) => {
     world.applyScene(m.scene, m);
     if (m.scene.setting) sound.setPlace(m.scene.setting.kind, m.scene.setting.time);
     if (m.scene.ended) setTimeout(() => { document.body.classList.add('finished'); $('fin').hidden = false; $('fin').classList.remove('gone'); }, 12000);
   })
-  .on('reply', (m) => { ui.dreamer(m.text); if ($('lang').value === 'auto' && m.lang) ui.setLang(m.lang); })
+  .on('reply', (m) => { ui.clearWaiting(); ui.dreamer(m.text); if ($('lang').value === 'auto' && m.lang) ui.setLang(m.lang); })
   .on('audio', (m) => sound.play(m.url))
   .on('speak', (m) => sound.speakFallback(m.text, m.lang, m.voice))
   .on('backdrop', (m) => world.setBackdrop(m.url))
   .on('sprite', (m) => world.setSprite(m.id, m.url))
-  .on('notice', (m) => ui.notice(m.key))
+  .on('notice', (m) => { ui.notice(m.key, m.detail); if (m.key === 'stumbled') ui.clearWaiting(); if (m.detail) console.warn('dreamscape:', m.key, m.detail); })
   .on('timings', (m) => ui.timings(m));
+
+// Before entering, the card shows what is still loading (the live link starts on entering).
+async function pollStatus() {
+  if ($('veil').hidden || net.open) return;
+  try { const s = await (await fetch('/api/status', { cache: 'no-store' })).json(); ui.setStatus(s); ui.waking(s); } catch { /* server still starting */ }
+  setTimeout(pollStatus, 2500);
+}
+pollStatus();
 
 // Entering the dream unlocks audio (browsers require a click).
 $('enter').addEventListener('click', () => {
@@ -70,7 +79,9 @@ async function endTalk() {
   if (!recording) return;
   recording = false; $('talk').classList.remove('recording'); ui.stage('idle');
   const blob = await sound.stopRecording();
-  if (blob) net.speakBlob(blob, blob.type); else ui.notice('short');
+  if (!blob) { ui.notice('short'); return; }
+  if (sound.peak < 0.03) { ui.notice('mic_silent'); return; }
+  net.speakBlob(blob, blob.type);
 }
 const talk = $('talk');
 talk.addEventListener('pointerdown', (e) => { e.preventDefault(); talk.setPointerCapture(e.pointerId); beginTalk(); });

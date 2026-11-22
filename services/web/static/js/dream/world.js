@@ -49,8 +49,19 @@ function layout(where, kind, i, n, r, heightAt) {
 
 const MIN_DIST = { castle: 16, house: 8, portal: 6, dragon: 6, horse: 3.5, boat: 3.5, spaceship: 3.2, water: 5 };
 
+// The dreamer is drawn densest of all: a white or pale one is drawn a shade greyer, or the
+// bloom turns it into a shapeless glow.
+const PROFILE_KINDS = new Set(['cat', 'dog', 'wolf', 'horse', 'bird', 'fish', 'dragon']);
+
+function notTooPale(value) {
+  const c = color(value, '#d8ecff');
+  const lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+  return lum > 0.6 ? '#' + c.multiplyScalar(0.6 / lum).getHexString() : value;
+}
+
 class Entity {
   constructor(world, spec, isSelf = false) {
+    if (isSelf && spec.kind !== 'wisp' && spec.color) spec = { ...spec, color: notTooPale(spec.color) };
     this.world = world; this.spec = { ...spec }; this.id = spec.id; this.isSelf = isSelf;
     const r = rng(spec.id + ':' + spec.kind);
     const n = spec.count || 1;
@@ -61,17 +72,41 @@ class Entity {
     const builder = spec.kind === 'wisp' ? wisp : (BUILDERS[spec.kind] || BUILDERS.other);
     this.b = builder(spec, r, place, { setting: world.settingKind });
     this.b.members ||= []; this.b.world ||= []; this.b.tintables ||= [];
+    if (isSelf && spec.kind !== 'wisp' && this.b.members.length) {
+      const m0 = this.b.members[0];
+      // Animals show their side to the viewer, so a horse or a bird reads by its shape;
+      // people, ghosts and fairies face the viewer.
+      m0.rotation.y = PROFILE_KINDS.has(spec.kind) ? 1.45 : 0;
+      m0.userData.yaw0 = m0.rotation.y;
+      // A small being (a bird, a fish) would be a speck: the dreamer's body is drawn at least
+      // 1.2 m big (glows and halos do not count).
+      this.b.root.updateMatrixWorld(true);
+      const body = new THREE.Box3(), part = new THREE.Box3();
+      m0.traverse((o) => {
+        if (!o.isMesh || !o.geometry) return;
+        if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
+        body.union(part.copy(o.geometry.boundingBox).applyMatrix4(o.matrixWorld));
+      });
+      const size = body.isEmpty() ? null : body.getSize(new THREE.Vector3());
+      const big = size ? Math.max(size.x, size.y, size.z) : 0;
+      if (big > 0.01 && big < 1.2) m0.scale.multiplyScalar(1.2 / big);
+    }
     this.b.members.forEach((m, k) => { m.userData.base = m.position.clone(); m.userData.phase = r() * 6.283 + k; m.userData.scale0 = m.scale.x; });
     this.root = this.b.root;
     // Everything solid is redrawn as a soft particle cloud.
-    const dense = isSelf ? { density: 1500, max: 9000 } : { density: 700, max: (spec.count || 1) > 3 ? 30000 : 14000 };
+    // The dreamer is drawn a little denser than other things, but not so dense that it
+    // blooms into a white blot.
+    const dense = isSelf ? { density: 1000, max: 8000 } : { density: 700, max: (spec.count || 1) > 3 ? 30000 : 14000 };
     pointify(this.root, dense);
     for (const w of this.b.world) pointify(w, dense);
     world.scene.add(this.root);
     for (const w of this.b.world) world.scene.add(w);
     if (isSelf && spec.kind !== 'wisp') {
-      this.aura = glowSprite(spec.color || '#d8ecff', 2.2, 0.35);
-      this.auraLight = new THREE.PointLight(color(spec.color, '#d8ecff'), 1.5, 6, 1.5);
+      // A white or pale dreamer already shines: a full halo on top would bloom it into a blot.
+      const c0 = color(spec.color, '#d8ecff');
+      this.auraDim = 1 - 0.6 * Math.min(1, 0.2126 * c0.r + 0.7152 * c0.g + 0.0722 * c0.b);
+      this.aura = glowSprite(spec.color || '#d8ecff', 1.7, 0.16);
+      this.auraLight = new THREE.PointLight(c0, 1.0, 6, 1.5);
       const m0 = this.b.members[0] || this.root;
       m0.add(this.aura, this.auraLight);
     }
@@ -87,6 +122,7 @@ class Entity {
 
   retint(c) {
     if (!c) return;
+    if (this.isSelf) c = notTooPale(c);
     this.tintTo = color(c, '#ffffff'); this.tintT = 0;
     this.tintFrom = this.fades.flatMap((f) => f.points).map((m) => ({ u: m.userData.dreamPoints, c: m.userData.dreamPoints.uTint.value.clone(), a: m.userData.dreamPoints.uTintAmt.value }));
   }
@@ -125,8 +161,8 @@ class Entity {
     if (this.aura) {
       const v = this.world.voice;
       this.aura.scale.setScalar(2.0 + 0.4 * Math.sin(t * 1.4) + 2.2 * v);
-      this.aura.material.opacity = (0.28 + 0.3 * v) * e;
-      this.auraLight.intensity = (1.2 + 3 * v) * e;
+      this.aura.material.opacity = (0.28 + 0.3 * v) * e * this.auraDim;
+      this.auraLight.intensity = (1.2 + 3 * v) * e * this.auraDim;
     }
   }
 
@@ -141,7 +177,7 @@ class Entity {
           const ground = GROUND_KINDS.has(this.spec.kind);
           const amp = this.spec.kind === 'fairy' || this.spec.kind === 'butterfly' ? 0.55 : 0.18;
           m.position.set(b.x + snoise(t * 0.25, ph) * amp, ground ? b.y : b.y + Math.sin(t * 0.8) * 0.12 + snoise(t * 0.3, ph + 2) * amp * 0.4, b.z + snoise(t * 0.21, ph + 5) * amp * 0.6);
-          if (!ground) m.rotation.y = Math.sin(t * 0.3) * 0.6;
+          if (!ground) m.rotation.y = (m.userData.yaw0 || 0) + Math.sin(t * 0.3) * 0.4;
           break;
         }
         case 'float': m.position.set(b.x, b.y + Math.sin(t * 0.9 + ph) * 0.2 + rise, b.z); m.rotation.y += dt * 0.2; break;
@@ -490,7 +526,9 @@ export class World {
       if (m.position.z > 18) m.position.z = -26; if (m.position.z < -26) m.position.z = 18;
       m.material.rotation += u.spin * dt;
       m.material.color.copy(mistColor);
-      m.material.opacity = mistA * (0.55 + 0.45 * Math.sin(t * 0.17 + u.ph));
+      // Puffs drifting between the viewer and the dreamer thin out, so the dreamer stays seen.
+      const front = THREE.MathUtils.smoothstep(m.position.z, -1.5, 2.5);
+      m.material.opacity = mistA * (0.55 + 0.45 * Math.sin(t * 0.17 + u.ph)) * (1 - 0.85 * front);
     }
     const mp = this.motes.geometry.attributes.position.array;
     for (let i = 0; i < this.motes.count; i++) {
