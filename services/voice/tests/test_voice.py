@@ -87,3 +87,18 @@ def test_undecodable_audio_is_a_clean_422(client):
     r = client.post("/stt", files={"audio": ("a.webm", b"\x1aE\xdf\xa3not-really-webm", "audio/webm")})
     assert r.status_code == 422
     main.stt.state = "waiting"
+
+
+def test_a_caller_who_went_away_is_not_spoken_for(client, monkeypatch):
+    calls = []
+    main.tts.engine = types.SimpleNamespace(synthesize=lambda *a, **k: calls.append(a) or (np.zeros(10, np.float32), 16000))
+    main.tts.styles = {"neutral": "N"}
+    main.tts.state = "ready"
+
+    async def gone(request):
+        return True
+
+    monkeypatch.setattr(main, "_gone", gone)
+    r = client.post("/tts", json={"text": "hello", "lang": "en"})
+    assert r.status_code == 499 and calls == []
+    main.tts.state = "waiting"

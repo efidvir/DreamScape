@@ -45,6 +45,11 @@ class NotReady(Exception):
     """A service is still waking up (downloading or loading its model)."""
 
 
+# A dream's id as the storyteller accepts it; a page that sends anything else gets a new one.
+SESSION_ID = re.compile(r"[A-Za-z0-9_-]{6,64}")
+MAX_CHARS = 1500          # characters of the player's words that one turn takes
+
+
 _SENTENCE_END = re.compile(r"[.!?…]+[\"'”»)]*\s+")
 
 
@@ -206,7 +211,7 @@ async def broadcast(msg: dict):
 class Dreamer:
     def __init__(self, ws: WebSocket):
         self.ws = ws
-        self.session = ""
+        self.session = uuid.uuid4().hex     # until the page names its own dream
         self.lang = "he"
         self.voice = "neutral"
         self.last_reply = ""
@@ -230,7 +235,9 @@ class Dreamer:
 
     # ----------------------------------------------------------------- session
     async def hello(self, data: dict):
-        self.session = str(data.get("session") or uuid.uuid4().hex)[:64]
+        sid = data.get("session")
+        # The page keeps the id the "session" answer carries, so a bad one is replaced once.
+        self.session = sid if isinstance(sid, str) and SESSION_ID.fullmatch(sid) else uuid.uuid4().hex
         self.lang = data.get("lang") if data.get("lang") in ("he", "en") else "he"
         await self._open("/session")
 
@@ -287,7 +294,9 @@ class Dreamer:
             # The dreamer is still answering: these words come next (typed words add up).
             p = self.pending
             if audio is None and p and p.get("audio") is None and p.get("text"):
-                text = f"{p['text']} {text or ''}".strip()
+                text = f"{p['text']} {text or ''}"
+            if text:
+                text = text.strip()[:MAX_CHARS]
             self.pending = {"text": text, "audio": audio, "mime": mime, "lang_hint": lang_hint,
                             "tries": tries}
             self.next_up = True
@@ -315,7 +324,7 @@ class Dreamer:
                 if not text:
                     await self.send({"type": "notice", "key": "not_heard"})
                     return
-            text = (text or "").strip()[:1500]
+            text = (text or "").strip()[:MAX_CHARS]
             if not text:
                 return
             await self.send({"type": "transcript", "text": text})

@@ -10,7 +10,7 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -36,6 +36,19 @@ logging.getLogger("uvicorn.access").addFilter(_QuietHealth())
 STARTED = time.time()
 stt = SpeechToText()
 tts = TextToSpeech()
+
+# Each engine works on one request at a time. Requests wait their turn here, without holding a
+# worker thread, and one whose caller has gone meanwhile (a closed page, a refresh) is dropped
+# when its turn comes, so the voice stays free for the players still listening.
+STT_GATE = asyncio.Semaphore(1)
+TTS_GATE = asyncio.Semaphore(1)
+
+
+async def _gone(request: Request) -> bool:
+    try:
+        return await request.is_disconnected()
+    except Exception:  # noqa: BLE001 - when in doubt, do the work
+        return False
 
 
 def _load_all():
@@ -71,7 +84,7 @@ async def healthz():
 
 
 @app.post("/stt")
-async def speech_to_text(audio: UploadFile = File(...), lang: str = Form("auto"),
+async def speech_to_text(request: Request, audio: UploadFile = File(...), lang: str = Form("auto"),
                          prompt: str = Form("")):
     data = await audio.read()
     if not data:
@@ -79,7 +92,12 @@ async def speech_to_text(audio: UploadFile = File(...), lang: str = Form("auto")
     if len(data) > 20 * 1024 * 1024:
         raise HTTPException(413, "audio too long")
     try:
-        return await asyncio.to_thread(stt.transcribe, data, lang, prompt[:400])
+        async with STT_GATE:
+            if await _gone(request):
+                raise HTTPException(499, "the caller went away")
+            return await asyncio.to_thread(stt.transcribe, data, lang, prompt[:400])
+    except HTTPException:
+        raise
     except stt_mod.NotReady as e:
         raise HTTPException(503, str(e))
     except Exception as e:  # noqa: BLE001 - answer cleanly so the connection stays usable
@@ -97,9 +115,14 @@ class SpeakIn(BaseModel):
 
 
 @app.post("/tts")
-async def text_to_speech(body: SpeakIn):
+async def text_to_speech(body: SpeakIn, request: Request):
     try:
-        wav, took = await asyncio.to_thread(tts.synthesize, body.text, body.lang, body.voice)
+        async with TTS_GATE:
+            if await _gone(request):
+                raise HTTPException(499, "the caller went away")
+            wav, took = await asyncio.to_thread(tts.synthesize, body.text, body.lang, body.voice)
+    except HTTPException:
+        raise
     except tts_mod.NotReady as e:
         raise HTTPException(503, str(e))
     except Exception as e:  # noqa: BLE001 - answer cleanly so the connection stays usable

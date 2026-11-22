@@ -168,6 +168,35 @@ def test_bad_session_id(client):
     assert client.post("/session", json={"session_id": "../../etc", "lang": "en"}).status_code in (400, 422)
 
 
+def test_a_turn_with_a_bad_dream_id_is_turned_away_before_it_starts(client, monkeypatch):
+    fake = FakeLLM([FAIRY])
+    monkeypatch.setattr(main.llm, "chat_stream", fake)
+    for sid in ("../../etc/passwd", "<script>alert(1)</script>", "abcdefg\n", "x"):
+        assert client.post("/turn/stream", json={"session_id": sid, "text": "hello"}).status_code == 422
+        assert client.post("/turn", json={"session_id": sid, "text": "hello"}).status_code == 422
+    assert fake.calls == []
+    assert main.store.get("abcdefg\n") is None
+    with pytest.raises(ValueError):
+        main.store.create("abcdefg\n", "en")
+
+
+def test_a_turn_that_breaks_still_ends_with_a_whole_answer(client, monkeypatch):
+    monkeypatch.setattr(main.llm, "chat_stream", FakeLLM([MOON]))
+
+    def broken_nudge(*a, **k):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(main.lexicon, "nudge", broken_nudge)
+    sid = "test-session-broken"
+    client.post("/session", json={"session_id": sid, "lang": "en"})
+    with client.stream("POST", "/turn/stream", json={"session_id": sid, "text": "We fly to the moon"}) as r:
+        assert r.status_code == 200
+        events = [json.loads(line) for line in r.iter_lines() if line.strip()]
+    assert events[-1]["type"] == "final" and events[-1]["fallback"] is True
+    assert "disk on fire" in events[-1]["error"]
+    assert sum(e["type"] == "final" for e in events) == 1
+
+
 def test_healthz(client):
     h = client.get("/healthz").json()
     assert h["service"] == "director" and h["status"] == "ok"

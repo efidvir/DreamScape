@@ -23,15 +23,29 @@ dream.world = world;
 dream.start((t, dt) => world.update(t, dt));
 sound.onLevel = (voice, mic) => { world.setVoice(voice); ui.setMicLevel(mic); };
 
-// Session: one dream per browser until "new dream".
-let session = localStorage.getItem('dreamscape.session');
-if (!session) { session = (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)).replace(/[^A-Za-z0-9-]/g, ''); localStorage.setItem('dreamscape.session', session); }
+// Session: one dream per browser until "new dream". The id works on any address, a LAN one
+// included, and the page keeps whichever id the server answers with.
+const SESSION_ID = /^[A-Za-z0-9_-]{6,64}$/;
+const remember = (id) => { try { localStorage.setItem('dreamscape.session', id); } catch { /* storage off */ } };
+let session = '';
+try { session = localStorage.getItem('dreamscape.session') || ''; } catch { /* storage off */ }
+if (!SESSION_ID.test(session)) {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  session = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+  remember(session);
+}
 const net = new Net(session, chosenLang);
 
 net.on('status', (m) => { ui.setStatus(m.services); ui.waking(m.services); })
   .on('waiting', (m) => { ui.waiting(m.for); if (m.services) ui.waking(m.services); })
-  .on('link', (m) => { if (!m.up) ui.notice('link'); })
+  .on('link', (m) => {
+    if (m.up) return;
+    // An answer cut off by the lost link is over: the orb and the dream stop waiting for it.
+    ui.notice('link'); ui.clearWaiting(); world.setThinking(false);
+    if (!recording) ui.stage('idle');
+  })
   .on('session', (m) => {
+    if (m.session && m.session !== net.session) { net.session = m.session; remember(m.session); }
     if (m.scene) world.applyScene(m.scene, { initial: true });
     if (m.scene && m.scene.setting) sound.setPlace(m.scene.setting.kind, m.scene.setting.time);
     if ($('lang').value === 'auto' && m.lang) ui.setLang(m.lang);

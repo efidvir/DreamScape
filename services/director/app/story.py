@@ -243,7 +243,7 @@ class SessionStore:
         return self.root / f"{sid}.json"
 
     def get(self, sid: str) -> Session | None:
-        if not SESSION_ID_RE.match(sid or ""):
+        if not SESSION_ID_RE.fullmatch(sid or ""):
             return None
         with self._lock:
             if sid in self._mem:
@@ -260,7 +260,7 @@ class SessionStore:
         return None
 
     def create(self, sid: str, lang: str) -> Session:
-        if not SESSION_ID_RE.match(sid or ""):
+        if not SESSION_ID_RE.fullmatch(sid or ""):
             raise ValueError("bad session id")
         sess = Session(id=sid, lang=lang)
         with self._lock:

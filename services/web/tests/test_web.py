@@ -280,3 +280,62 @@ def test_words_said_while_the_dreamer_answers_come_next(client):
     finally:
         main.Dreamer.director_events = real
     assert seen == ["you are a fairy", "fly to the moon"]
+
+
+def test_a_bad_dream_id_gets_a_fresh_one_the_page_can_keep(client):
+    sent = []
+    real = main.Dreamer.director_events
+
+    async def spy(self, text, lang_hint):
+        sent.append(self.session)
+        async for ev in real(self, text, lang_hint):
+            yield ev
+
+    main.Dreamer.director_events = spy
+    try:
+        for bad in ("../../etc/passwd", "<script>", "x", "abcdefg\n", 12345678, None):
+            with client.websocket_connect("/ws") as ws:
+                ws.send_json({"type": "hello", "session": bad, "lang": "en"})
+                got = _until(ws, "session")
+                assert got["session"] != bad and re.fullmatch(r"[A-Za-z0-9_-]{6,64}", got["session"])
+                ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+                assert _until(ws, "reply")["text"] == "A fairy... yes."
+                assert sent[-1] == got["session"]
+        with client.websocket_connect("/ws") as ws:            # a good id is kept as it is
+            ws.send_json({"type": "hello", "session": "good_id-123", "lang": "en"})
+            assert _until(ws, "session")["session"] == "good_id-123"
+    finally:
+        main.Dreamer.director_events = real
+
+
+def test_words_before_hello_still_reach_the_storyteller(client):
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+        assert _until(ws, "reply")["text"] == "A fairy... yes."
+
+
+def test_a_flood_of_words_while_busy_stays_one_turn_of_words(client):
+    seen = []
+    real = main.Dreamer.director_events
+
+    async def slow(self, text, lang_hint):
+        seen.append(text)
+        if len(seen) == 1:
+            import asyncio
+            await asyncio.sleep(0.3)
+        async for ev in real(self, text, lang_hint):
+            yield ev
+
+    main.Dreamer.director_events = slow
+    try:
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "hello", "session": "abcdef888", "lang": "en"})
+            _until(ws, "audio")
+            ws.send_json({"type": "text", "text": "you are a fairy", "lang": None})
+            for _ in range(20):
+                ws.send_json({"type": "text", "text": "moon " * 400, "lang": None})
+            _until(ws, "timings")
+            _until(ws, "timings")
+    finally:
+        main.Dreamer.director_events = real
+    assert len(seen) == 2 and len(seen[1]) <= main.MAX_CHARS

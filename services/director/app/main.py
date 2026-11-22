@@ -10,6 +10,7 @@ import re
 import time
 from collections import defaultdict, deque
 from contextlib import aclosing, asynccontextmanager
+from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -19,7 +20,7 @@ from pydantic import BaseModel, Field
 from . import lexicon, prompt, vocab
 from .llm import Ollama, parse_json_loose
 from .schema import TurnOutput, parse_turn, turn_schema
-from .story import SessionStore
+from .story import SESSION_ID_RE, SessionStore
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -77,13 +78,17 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="DreamScape director", lifespan=lifespan)
 
 
+# A dream's id names its file, so anything else is turned away before a turn starts.
+SessionId = Annotated[str, Field(min_length=6, max_length=64, pattern=SESSION_ID_RE.pattern)]
+
+
 class SessionIn(BaseModel):
-    session_id: str = Field(min_length=6, max_length=64)
+    session_id: SessionId
     lang: str = "he"
 
 
 class TurnIn(BaseModel):
-    session_id: str = Field(min_length=6, max_length=64)
+    session_id: SessionId
     text: str = Field(min_length=1, max_length=2000)
     lang: str | None = None
     pictures: bool = False      # true when an imagery service will paint a backdrop
@@ -443,11 +448,31 @@ async def _ready_or_503():
                                          "progress": llm.progress})
 
 
+async def _whole_turn(body: TurnIn):
+    """The turn's events, always ending with one "final". Whatever goes wrong on the way
+    ends the answer with a fallback the caller can show, so a half-sent answer never looks
+    like the storyteller going away (which would hold every player's words)."""
+    ended = False
+    try:
+        async with aclosing(_turn_events(body)) as events:
+            async for kind, payload in events:
+                ended = ended or kind == "final"
+                yield kind, payload
+    except Exception as e:  # noqa: BLE001 - the dream must never stall
+        if ended:
+            raise
+        stats["fallbacks"] += 1
+        log.exception("turn failed")
+        yield "final", {"session_id": body.session_id, "lang": _lang(body.lang),
+                        "reply": prompt.FALLBACK[_lang(body.lang)], "fallback": True,
+                        "error": f"{type(e).__name__}: {e}"[:200], "effect": "ripple"}
+
+
 @app.post("/turn")
 async def turn(body: TurnIn):
     await _ready_or_503()
     final = None
-    async for kind, payload in _turn_events(body):
+    async for kind, payload in _whole_turn(body):
         if kind == "final":
             final = payload
     return final
@@ -460,7 +485,7 @@ async def turn_stream(body: TurnIn):
     await _ready_or_503()
 
     async def lines():
-        async for kind, payload in _turn_events(body):
+        async for kind, payload in _whole_turn(body):
             yield json.dumps({"type": kind, **payload}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(lines(), media_type="application/x-ndjson")
