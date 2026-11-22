@@ -1,0 +1,8 @@
+# enough to run the tests without the speech models
+fastapi==0.165.0
+python-multipart==0.0.34
+pydantic==2.14.4
+soundfile==0.14.0
+numpy
+httpx
+pytest==9.2.0

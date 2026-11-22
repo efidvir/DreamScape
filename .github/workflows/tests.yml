@@ -1,0 +1,26 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: pip install -r services/director/requirements-dev.txt -r services/web/requirements-dev.txt -r services/voice/requirements-dev.txt
+      - name: Director
+        run: cd services/director && pytest -q
+      - name: Web
+        run: cd services/web && pytest -q
+      - name: Voice
+        run: cd services/voice && pytest -q
+      - name: Compose files
+        run: |
+          docker compose config --quiet
+          cd worker && SCHEDULER_HOST=10.0.0.1 WORKER_HOST=10.0.0.2 docker compose config --quiet

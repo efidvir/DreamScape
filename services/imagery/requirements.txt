@@ -1,0 +1,11 @@
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+dask[distributed]==2026.8.0
+distributed==2026.8.0
+bokeh
+diffusers==0.43.0
+transformers==5.24.0
+accelerate==1.16.0
+safetensors
+pillow

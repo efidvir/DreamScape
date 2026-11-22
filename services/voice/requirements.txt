@@ -1,0 +1,11 @@
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+python-multipart==0.0.34
+pydantic==2.14.4
+soundfile==0.14.0
+faster-whisper==1.2.1
+# CUDA 12 libraries for faster-whisper / CTranslate2 (the NVIDIA driver comes from the host)
+nvidia-cublas-cu12
+nvidia-cudnn-cu12==9.*
+# BlueTTS: Hebrew-first multilingual TTS on ONNX Runtime, pinned to a tested commit
+blue-onnx @ https://github.com/maxmelichov/BlueTTS/archive/536fb096857a4a1ba4b712119e500cdeffa62f27.tar.gz

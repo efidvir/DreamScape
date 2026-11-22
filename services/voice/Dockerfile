@@ -1,0 +1,18 @@
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PIP_ROOT_USER_ACTION=ignore PIP_DISABLE_PIP_VERSION_CHECK=1
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /srv
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+
+# Let CTranslate2 find the pip-installed CUDA libraries.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib \
+    HF_HOME=/models/hf \
+    WHISPER_DIR=/models/whisper \
+    TTS_DIR=/models/bluev3
+
+COPY app ./app
+EXPOSE 9020
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9020"]
