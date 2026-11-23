@@ -65,6 +65,7 @@ THINGS = {
     "book": "book or scroll",
     "sword": "sword or wand",
     "orb": "magic orb or ball of light",
+    "volcano": "volcano, lava or an eruption",
     "other": "anything else (describe it in label)",
 }
 
@@ -92,10 +93,10 @@ DEFAULT_WHERE = {
     "moon": "sky", "sun": "sky", "planet": "sky", "star": "sky", "rainbow": "sky",
     "cloud": "sky", "bird": "sky", "dragon": "sky", "tree": "around", "flower": "ground",
     "mushroom": "ground", "rock": "ground", "water": "ground", "house": "far", "castle": "far",
-    "fireflies": "around", "fire": "near", "portal": "far",
+    "fireflies": "around", "fire": "near", "portal": "far", "volcano": "far",
 }
 MAX_COUNT = {"fireflies": 60, "tree": 40, "flower": 40, "star": 40, "mushroom": 24, "rock": 16,
-             "butterfly": 12, "bird": 12, "fish": 16, "crystal": 12, "cloud": 10}
+             "butterfly": 12, "bird": 12, "fish": 16, "crystal": 12, "cloud": 10, "volcano": 2}
 DEFAULT_MAX_COUNT = 6
 
 MAX_THINGS = 16          # the dream "forgets" its oldest things beyond this

@@ -17,7 +17,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import guard, lexicon, prompt, vocab
+from . import guard, hebrew, lexicon, prompt, vocab
 from .llm import Ollama, parse_json_loose
 from .schema import TurnOutput, parse_turn, turn_schema
 from .story import SESSION_ID_RE, SessionStore
@@ -116,8 +116,15 @@ async def _wait_ready(timeout: float) -> bool:
     return True
 
 
+def _listener(sess, words: str) -> str:
+    """Who the dreamer's words speak to: how they address the player, else how the player
+    speaks of themselves. The voice reads "שלך" as shelach or shelcha from it."""
+    return hebrew.addressed(words) or sess.player
+
+
 def _payload(sess, reply: str, extra: dict | None = None) -> dict:
     out = {"session_id": sess.id, "lang": sess.lang, "reply": reply, "voice": sess.voice,
+           "listener": _listener(sess, reply),
            "scene": sess.scene(), "added": [], "changed": [], "removed": [], "effect": "none",
            "backdrop": "", "facts": sess.facts}
     out.update(extra or {})
@@ -376,6 +383,7 @@ async def _turn_events(body: TurnIn):
     # Answer in the language the player actually used; the hint only breaks ties.
     lang = prompt.detect_lang(text, _lang(body.lang, sess.lang))
     heard = lexicon.read(text)
+    sess.player = hebrew.self_gender(text) or sess.player     # "אני הולכת": the player is a she
     drift = guard.drift_line(lang)     # one per turn, so a replaced sentence and reply agree
     async with locks[sess.id]:
         sess.lang = lang
@@ -388,7 +396,7 @@ async def _turn_events(body: TurnIn):
             msgs = prompt.build_messages(sess.summary(), sess.history, text, lang, HISTORY_TURNS,
                                          sess.now_line(), pictures=body.pictures,
                                          strict_lang=wrong_lang, gender=gender,
-                                         note=guard.note(heard_as))
+                                         note=guard.note(heard_as), player=sess.player)
             try:
                 # The second try runs a little cooler, which usually fixes a malformed answer.
                 written, wrong_lang = "", False
@@ -416,10 +424,12 @@ async def _turn_events(body: TurnIn):
                             break
                         v = VOICE_DONE.search(written)
                         voice = v.group(1) if v and v.group(1) in vocab.VOICES else None
-                        if not voice and sess.voice == "neutral" and heard.voice:
-                            voice = heard.voice
+                        if not voice and sess.voice == "neutral":
+                            # what the player made it, else how it speaks of itself ("אני מרגישה")
+                            voice = heard.voice or hebrew.self_gender(words) or None
                         # The voice reads the words in the language they are written in.
-                        said = {"lang": said_in, "voice": voice or sess.voice}
+                        said = {"lang": said_in, "voice": voice or sess.voice,
+                                "listener": _listener(sess, words)}
                         if done:
                             early = words
                             yield "reply", {"reply": early, **said}
@@ -475,6 +485,8 @@ async def _turn_events(body: TurnIn):
             recent[-1]["nudged"] = notes
         sess.remember("user", text)
         change = sess.apply(out)
+        if sess.voice == "neutral":
+            sess.voice = hebrew.self_gender(out.reply) or "neutral"   # its words chose a gender
         reply = out.reply
         if sess.ended and out.ending:
             reply = f"{reply} {prompt.ENDINGS[lang]}"

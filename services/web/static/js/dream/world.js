@@ -2,7 +2,7 @@
 // dissolves them in and out, moves them, blends one place into the next, and
 // carries the sky, fog, light, mist and weather.
 import * as THREE from 'three';
-import { BUILDERS, GROUND_KINDS, SKY_KINDS, wisp } from './things.js';
+import { BUILDERS, GROUND_KINDS, SKY_KINDS, wisp, guessKind } from './things.js';
 import { buildSetting, palette } from './settings.js';
 import { pointify, dreamU, imageCloud } from './points.js';
 import { rng, color, collectFade, applyFade, disposeDeep, Particles, mistTex, softDot, snoise, glowSprite, sparkleTex, dreamClock } from './kit.js';
@@ -11,7 +11,7 @@ const FADE_IN = 3.6, FADE_OUT = 2.6;
 const _tmpC = new THREE.Color();
 const ease = (x) => x * x * (3 - 2 * x);
 
-function layout(where, kind, i, n, r, heightAt) {
+function layout(where, kind, i, n, r, heightAt, size = 'medium') {
   const ground = GROUND_KINDS.has(kind);
   let x = 0, y = 1, z = 0;
   if (SKY_KINDS.has(kind) && kind !== 'cloud' && n === 1 && where !== 'near' && where !== 'center') where = 'sky';
@@ -37,8 +37,8 @@ function layout(where, kind, i, n, r, heightAt) {
       y = 0.8 + r() * 2.2;
     }
   }
-  // Big structures keep their distance so they never swallow the dreamer.
-  const minD = MIN_DIST[kind];
+  // Big structures and big things keep their distance so they never swallow the dreamer.
+  const minD = Math.max(MIN_DIST[kind] || 0, SIZE_DIST[size] || 0);
   if (minD && where !== 'sky') {
     const d = Math.hypot(x, z);
     if (d < minD) { const k = minD / Math.max(0.001, d); x *= k; z *= k; if (z > 0) z = -z; }
@@ -47,7 +47,8 @@ function layout(where, kind, i, n, r, heightAt) {
   return new THREE.Vector3(x, y, z);
 }
 
-const MIN_DIST = { castle: 16, house: 8, portal: 6, dragon: 6, horse: 3.5, boat: 3.5, spaceship: 3.2, water: 5 };
+const SIZE_DIST = { large: 4.5, huge: 9 };
+const MIN_DIST = { castle: 16, house: 8, portal: 6, dragon: 6, horse: 3.5, boat: 3.5, spaceship: 3.2, water: 5, volcano: 15 };
 
 // The dreamer is drawn densest of all: a white or pale one is drawn a shade greyer, or the
 // bloom turns it into a shapeless glow.
@@ -66,10 +67,12 @@ class Entity {
     const r = rng(spec.id + ':' + spec.kind);
     const n = spec.count || 1;
     const heightAt = world.heightAt;
+    // Something filed as "other" is still drawn as itself when its label names a shape we have.
+    const shape = spec.kind === 'other' ? (guessKind(spec.label) || 'other') : spec.kind;
     const place = isSelf
-      ? () => new THREE.Vector3(0, GROUND_KINDS.has(spec.kind) ? heightAt(0, 0) : 1.25, 0)
-      : (i) => layout(spec.where, spec.kind, i, n, r, heightAt);
-    const builder = spec.kind === 'wisp' ? wisp : (BUILDERS[spec.kind] || BUILDERS.other);
+      ? () => new THREE.Vector3(0, GROUND_KINDS.has(shape) ? heightAt(0, 0) : 1.25, 0)
+      : (i) => layout(spec.where, shape, i, n, r, heightAt, spec.size);
+    const builder = shape === 'wisp' ? wisp : (BUILDERS[shape] || BUILDERS.other);
     this.b = builder(spec, r, place, { setting: world.settingKind });
     this.b.members ||= []; this.b.world ||= []; this.b.tintables ||= [];
     if (isSelf && spec.kind !== 'wisp' && this.b.members.length) {
@@ -90,6 +93,7 @@ class Entity {
       const size = body.isEmpty() ? null : body.getSize(new THREE.Vector3());
       const big = size ? Math.max(size.x, size.y, size.z) : 0;
       if (big > 0.01 && big < 1.2) m0.scale.multiplyScalar(1.2 / big);
+      else if (big > 3.2) m0.scale.multiplyScalar(3.2 / big);      // a whale still fits the view
     }
     this.b.members.forEach((m, k) => { m.userData.base = m.position.clone(); m.userData.phase = r() * 6.283 + k; m.userData.scale0 = m.scale.x; });
     this.root = this.b.root;
@@ -360,7 +364,13 @@ export class World {
         if (cur) { cur.target = 0; this.dying.push(cur); }
         const ent = new Entity(this, t);
         this.entities.set(t.id, ent);
-        if (!change.initial && !cur) this.materialize(ent);
+        if (!change.initial && !cur) {
+          this.materialize(ent);
+          if (t.kind === 'volcano' || guessKind(t.label) === 'volcano') {   // it erupts as it appears
+            this.burst(ent.anchor.clone().add(new THREE.Vector3(0, 3, 0)), '#ff7a2a', 320);
+            this.dream.flash(new THREE.Color('#ff6a2a'), 0.6);
+          }
+        }
       } else {
         if (cur.spec.color !== t.color) { cur.retint(t.color); cur.spec.color = t.color; }
         if (cur.spec.motion !== t.motion) { cur.motion = t.motion; cur.spec.motion = t.motion; }

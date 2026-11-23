@@ -49,6 +49,7 @@ class Session:
     turn: int = 0
     facts: list[str] = field(default_factory=list)
     voice: str = "neutral"
+    player: str = ""                 # how the player speaks of themselves: female, male or unknown
     self_form: str = "wisp"
     self_label: str = ""
     self_color: str = "#d8ecff"

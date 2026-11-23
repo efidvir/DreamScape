@@ -24,14 +24,14 @@ flowchart LR
 
 ### How the dream is drawn
 
-Everything on screen is a particle cloud. The renderer knows 13 settings (void, forest, meadow, desert, ocean, mountains, cave, city, space, moon, clouds, snow, underwater) and 39 kinds of things (fairy, dragon, unicorn, castle, spaceship, cheese, portal, crystals…), each with colour, size, count, placement and motion. Each one is shaped in 3D, then sampled into thousands of soft particles. Its hard geometry is never drawn.
+Everything on screen is a particle cloud. The renderer knows 13 settings (void, forest, meadow, desert, ocean, mountains, cave, city, space, moon, clouds, snow, underwater) and 40 kinds of things (fairy, dragon, unicorn, castle, spaceship, cheese, portal, crystals, volcano…), each with colour, size, count, placement and motion. Each one is shaped in 3D, then sampled into thousands of soft particles. Its hard geometry is never drawn.
 
 - **Appearing and vanishing:** particles stream in from the surrounding mist when a thing appears and scatter back when it goes. When the dreamer changes form, one cloud dissolves while the next gathers in the same place.
 - **Haze:** the dream breathes between hazy and clear. In the haze, particles drift loose and shapes soften, and some dust always floats off the edges.
 - **Focus:** each particle blurs by its own distance from the point of attention, like a camera lens. The lens follows whatever just appeared.
 - **Pictures (with the imagery service on):** every new thing and every new form of the dreamer also gets a generated picture. The picture is sampled into its own particle cloud, which takes over from the geometric one, so the dream looks painted.
 
-Anything outside the vocabulary appears as a shimmering apparition until its picture arrives.
+Some kinds take their shape from the word that named them: a fish labelled dolphin, whale, shark or octopus is drawn as one, at its own size, and a bear or a rabbit gets its own build. A volcano runs with lava, throws embers and smoke, and erupts as it appears. When the storyteller files something as "other", the director reads its label with the same Hebrew and English word lists (plurals and feminine forms included, so "דולפינים" and "דולפינה" are dolphins) and draws it as the kind it names. Anything still outside the vocabulary appears as a slowly turning glow of its colour until its picture arrives.
 
 ## Run it
 
@@ -63,7 +63,7 @@ Browsers allow the microphone only on `localhost` or over HTTPS, so speak to the
 
 ### When the model misses something
 
-A 4B model sometimes answers beautifully and still leaves the scene unchanged. After each turn the director reads the player's own words (Hebrew and English word lists in `services/director/app/lexicon.py`) and fills what the model left out: the place, what the dreamer is, its voice, weather, time of day and the things named. The model's own choices always win; the dream only moves to a new place when the player names one or travels. A turn the model fails twice comes back as a short notice, and the story stays unchanged, so the player can simply say it again. Saying the dreamer wakes up in bed ("אתה מתעורר במיטה", "you wake up in your bed") ends the dream. Words said while the dreamer is still answering are kept and answered right after, and if the storyteller restarts in the middle of a turn, the turn waits for it instead of failing.
+A 4B model sometimes answers beautifully and still leaves the scene unchanged. After each turn the director reads the player's own words (Hebrew and English word lists in `services/director/app/lexicon.py`) and fills what the model left out: the place, what the dreamer is, its voice, weather, time of day and the things named. The model's own choices always win; the dream only moves to a new place when the player names one or travels. The voice reads Hebrew by who speaks and who is spoken to ("אני רוצה" is rotze or rotza, "שלך" shelcha or shelach): the director works out the dreamer's gender from its own words ("אני מרגישה") and the player's from theirs ("אני הולכת") or from how the dreamer addresses them, tells the storyteller how to address the player, and sends both with every sentence to the voice. A turn the model fails twice comes back as a short notice, and the story stays unchanged, so the player can simply say it again. Saying the dreamer wakes up in bed ("אתה מתעורר במיטה", "you wake up in your bed") ends the dream. Words said while the dreamer is still answering are kept and answered right after, and if the storyteller restarts in the middle of a turn, the turn waits for it instead of failing.
 
 ### A gentle dream
 

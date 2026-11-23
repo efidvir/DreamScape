@@ -78,6 +78,9 @@ def gpu_providers(mem_mb: int) -> list | None:
     return [("CUDAExecutionProvider", opts), "CPUExecutionProvider"]
 
 
+GENDER_HINT = {"male": 1, "female": 2}
+
+
 def _voice_list(env: str, default: str) -> list[str]:
     return [v.strip() for v in os.environ.get(env, default).split(",") if v.strip()]
 
@@ -169,16 +172,38 @@ class TextToSpeech:
                           model=style.model, speed_scale=mean_speed_scale(style.speed_scale))
         return style
 
-    def synthesize(self, text: str, lang: str, voice: str = "neutral") -> tuple[bytes, float]:
+    def _genders(self, speaker: int, listener: int) -> None:
+        """Hebrew is read by RenikudPlus, which takes who speaks and who is spoken to
+        (0 unknown, 1 male, 2 female): "אני רוצה" is rotze or rotza, "לך" lecha or lach."""
+        g2p = getattr(getattr(self.engine, "tts", None), "g2p", None)
+        if g2p is not None:
+            g2p.speaker, g2p.target_speaker = int(speaker), int(listener)
+
+    def synthesize(self, text: str, lang: str, voice: str = "neutral", speaker: int | None = None,
+                   listener: int = 0) -> tuple[bytes, float]:
         if self.state != "ready":
             raise NotReady(f"text-to-speech not ready ({self.state})")
         import soundfile as sf
         lang = lang if lang in ("he", "en") else "he"
         style = self.styles.get(voice) or self.styles["neutral"]
+        if speaker is None:
+            speaker = GENDER_HINT.get(voice, 0)
         t0 = time.perf_counter()
         with self._lock:
+            self._genders(speaker, listener)
             samples, sr = self.engine.synthesize(text, lang=lang, speed=self.speed, style=style)
         samples = np.asarray(samples, dtype=np.float32).reshape(-1)
         buf = io.BytesIO()
         sf.write(buf, samples, sr, format="WAV", subtype="PCM_16")
         return buf.getvalue(), round(time.perf_counter() - t0, 3)
+
+    def phonemes(self, text: str, speaker: int = 0, listener: int = 0) -> dict:
+        """How the voice will read Hebrew text (IPA), to check a reading without listening."""
+        if self.state != "ready":
+            raise NotReady(f"text-to-speech not ready ({self.state})")
+        g2p = self.engine.tts.g2p
+        with self._lock:
+            self._genders(speaker, listener)
+            ipa = g2p.phonemize(text, "he")
+            model = g2p._load_renikud()
+        return {"ipa": ipa, "gender_aware": bool(getattr(model, "supports_gender", False))}

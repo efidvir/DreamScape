@@ -26,6 +26,7 @@ THING_WORDS: list[tuple[str, str, int]] = [
     ("כדור אור", "orb", 1), ("כדור קסם", "orb", 1), ("שרביט קסם", "sword", 1),
     ("space ship", "spaceship", 1), ("shooting star", "star", 1), ("the earth", "planet", 1),
     ("magic wand", "sword", 1), ("crystal ball", "orb", 1),
+    ("הר געש", "volcano", 1), ("הרי געש", "volcano", 2), ("הר הגעש", "volcano", 1),
     # Hebrew
     ("פיה", "fairy", 1), ("פיות", "fairy", 3), ("פרפר", "butterfly", 1), ("פרפרים", "butterfly", 8),
     ("גחלילית", "fireflies", 12), ("גחליליות", "fireflies", 30), ("ציפור", "bird", 1),
@@ -85,6 +86,11 @@ THING_WORDS: list[tuple[str, str, int]] = [
     ("crown", "crown", 1), ("key", "key", 1), ("book", "book", 1), ("scroll", "book", 1),
     ("sword", "sword", 1), ("wand", "sword", 1), ("orb", "orb", 1),
     ("whale", "fish", 1), ("dolphin", "fish", 1), ("shark", "fish", 1), ("octopus", "fish", 1),
+    ("whales", "fish", 3), ("dolphins", "fish", 4), ("sharks", "fish", 3),
+    ("volcano", "volcano", 1), ("volcanoes", "volcano", 2), ("lava", "volcano", 1),
+    ("bear", "wolf", 1), ("bears", "wolf", 3), ("rabbit", "cat", 1), ("rabbits", "cat", 4),
+    ("bunny", "cat", 1), ("לבה", "volcano", 1), ("דוב", "wolf", 1), ("ארנב", "cat", 1),
+    ("ארנבת", "cat", 1), ("ארנבון", "cat", 1),
     ("robot", "person", 1), ("angel", "person", 1), ("owl", "bird", 1), ("eagle", "bird", 1),
     ("lion", "cat", 1), ("tiger", "cat", 1),
 ]
@@ -142,7 +148,9 @@ HE_GLOSS = {"שועל": "fox", "צבי": "deer", "איילה": "deer", "חד ק�
             "מגדל": "tower", "ארמון": "palace", "בקתה": "cabin", "שער": "gate", "דלת": "door",
             "לוויתן": "whale", "לווייתן": "whale", "דולפין": "dolphin", "כריש": "shark",
             "תמנון": "octopus", "רובוט": "robot", "מלאך": "angel", "ינשוף": "owl", "נשר": "eagle",
-            "אריה": "lion", "נמר": "tiger", "מלכת": "queen", "נסיכת": "princess"}
+            "אריה": "lion", "נמר": "tiger", "מלכת": "queen", "נסיכת": "princess",
+            "הר געש": "volcano", "הרי געש": "volcano", "הר הגעש": "volcano", "לבה": "lava",
+            "דוב": "bear", "ארנב": "rabbit", "ארנבת": "rabbit", "ארנבון": "rabbit"}
 
 PREFIXES = "והבלמשכ"
 HE = re.compile(r"[א-ת'\"\-]+")
@@ -193,9 +201,34 @@ def _words(text: str) -> list[str]:
     return HE.findall(text) + EN.findall(text)
 
 
-def _lookup(word: str, *indexes: dict):
-    """Exact matches first (so "מים", water, is never read as "ים", sea), then without prefixes."""
-    for forms in ([word], _bare(word)[1:]):
+FINAL = {"כ": "ך", "מ": "ם", "נ": "ן", "פ": "ף", "צ": "ץ"}
+
+
+def _stems(word: str) -> list[str]:
+    """The base form of a Hebrew plural or feminine word: דולפינים and דולפינה are דולפין,
+    סירות is סירה. Bases shorter than three letters are left out ("ימים" is not "ים")."""
+    def final(w: str) -> str:
+        return w[:-1] + FINAL.get(w[-1], w[-1]) if w else w
+    out = []
+    if word.endswith("ים") and len(word) >= 5:
+        out.append(final(word[:-2]))
+    if word.endswith("ות") and len(word) >= 4:
+        out += [word[:-2] + "ה", final(word[:-2])]
+    if word.endswith("ית") and len(word) >= 5:
+        out.append(final(word[:-2]))
+    if word.endswith("ה") and len(word) >= 4:
+        out.append(final(word[:-1]))
+    return [w for w in out if len(w) >= 3]
+
+
+def _lookup(word: str, *indexes: dict, stems: bool = False):
+    """Exact matches first (so "מים", water, is never read as "ים", sea), then without prefixes,
+    then, when asked, the base form of a plural or feminine word (only ever for things:
+    "מדברים", talking, is not a desert)."""
+    tiers = [[word], _bare(word)[1:]]
+    if stems:
+        tiers.append([s for w in _bare(word) for s in _stems(w)])
+    for forms in tiers:
         for w in forms:
             for n, index in enumerate(indexes):
                 if w in index:
@@ -223,7 +256,7 @@ def _form_after(lead: str, tail: str) -> tuple[str | None, str]:
                 break
         words = kept
     for w in words:
-        _, found, hit = _lookup(w, _THING_INDEX)
+        _, found, hit = _lookup(w, _THING_INDEX, stems=True)
         if hit and hit[0] in vocab.SELF_FORMS:
             return hit[0], found
     return None, ""
@@ -266,6 +299,11 @@ def read(text: str) -> Heard:
         which, found, hit = _lookup(w, _SETTING_INDEX, WEATHER_WORDS, TIME_WORDS, _THING_INDEX,
                                     EFFECT_WORDS)
         if which is None:
+            _, found, hit = _lookup(w, _THING_INDEX, stems=True)     # דולפינים, ארנבות
+            if hit and w.endswith(("ים", "ות")):
+                hit = (hit[0], max(hit[1], 3))                      # a plural is a few
+            which = 3 if hit else None
+        if which is None:
             continue
         if which == 4:
             heard.effect = heard.effect or hit
@@ -284,6 +322,20 @@ def read(text: str) -> Heard:
         else:
             heard.things.append((hit[0], hit[1], found))
     return heard
+
+
+def kind_of(label: str) -> str | None:
+    """The kind a free-text label names, if the dream can draw it ("erupting volcano" is a
+    volcano, "דולפין מעופף" a fish), else None."""
+    low = " " + " ".join((label or "").lower().replace("־", " ").split()) + " "
+    for phrase, kind, _ in _THING_PHRASES:
+        if phrase in low:
+            return kind
+    for w in _words(low):
+        _, _, hit = _lookup(w, _THING_INDEX, stems=True)
+        if hit and hit[0] != "other":
+            return hit[0]
+    return None
 
 
 # Words for going somewhere: without one of these (or a place named outright) the dream
@@ -334,6 +386,11 @@ def nudge(out: TurnOutput, text: str, current_setting: str, current_form: str,
           current_voice: str, present_kinds: set[str], present_labels: list[str] = (),
           max_add: int = 2, current_label: str = "") -> list[str]:
     """Fill what the model left out. Returns a short note of each change, for the debug log."""
+    for t in out.add:                    # "other: erupting volcano" is a volcano the dream can draw
+        if t.kind == "other" and (k := kind_of(t.label)):
+            t.kind = k
+    if out.self_form == "other" and (k := kind_of(out.self_label)):
+        out.self_form = k
     heard = read(text)
     notes: list[str] = []
     refine_kinds(out)

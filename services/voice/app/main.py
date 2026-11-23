@@ -112,6 +112,8 @@ class SpeakIn(BaseModel):
     text: str = Field(min_length=1, max_length=1200)
     lang: str = "he"
     voice: str = "neutral"
+    speaker: int | None = Field(None, ge=0, le=2)   # who speaks: 0 unknown, 1 male, 2 female
+    listener: int = Field(0, ge=0, le=2)            # who is spoken to
 
 
 @app.post("/tts")
@@ -120,7 +122,8 @@ async def text_to_speech(body: SpeakIn, request: Request):
         async with TTS_GATE:
             if await _gone(request):
                 raise HTTPException(499, "the caller went away")
-            wav, took = await asyncio.to_thread(tts.synthesize, body.text, body.lang, body.voice)
+            wav, took = await asyncio.to_thread(tts.synthesize, body.text, body.lang, body.voice,
+                                                body.speaker, body.listener)
     except HTTPException:
         raise
     except tts_mod.NotReady as e:
@@ -129,6 +132,17 @@ async def text_to_speech(body: SpeakIn, request: Request):
         log.exception("text-to-speech failed")
         raise HTTPException(500, f"text-to-speech failed: {type(e).__name__}: {e}"[:300])
     return Response(content=wav, media_type="audio/wav", headers={"X-Synth-Seconds": str(took)})
+
+
+@app.get("/debug/g2p")
+async def debug_g2p(text: str, speaker: int = 0, listener: int = 0):
+    """How the voice reads Hebrew (IPA) for a speaker and listener gender (0 unknown,
+    1 male, 2 female), to check gendered readings without listening."""
+    try:
+        async with TTS_GATE:
+            return await asyncio.to_thread(tts.phonemes, text[:600], speaker, listener)
+    except tts_mod.NotReady as e:
+        raise HTTPException(503, str(e)) from e
 
 
 class DeviceIn(BaseModel):

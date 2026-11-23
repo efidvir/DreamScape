@@ -21,10 +21,10 @@ def ndjson(final: dict) -> httpx.Response:
         lines.append({"type": "heard", "text": STATE["heard"]})
     if STATE.get("first") and not final.get("fallback"):
         lines.append({"type": "first", "text": STATE["first"], "lang": final.get("lang", "en"),
-                      "voice": final.get("voice", "neutral")})
+                      "voice": final.get("voice", "neutral"), "listener": final.get("listener", "")})
     if not final.get("fallback"):
         lines.append({"type": "reply", "reply": final["reply"], "lang": final.get("lang", "en"),
-                      "voice": final.get("voice", "neutral")})
+                      "voice": final.get("voice", "neutral"), "listener": final.get("listener", "")})
     lines.append({"type": "final", **final})
     return httpx.Response(200, content="".join(json.dumps(x) + "\n" for x in lines).encode(),
                           headers={"content-type": "application/x-ndjson"})
@@ -53,6 +53,7 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=final)
         return ndjson(final)
     if path == "/tts":
+        STATE.setdefault("spoken", []).append(json.loads(request.content))
         return httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
     if path == "/stt":
         return httpx.Response(200, json={"text": STATE["stt_text"]})
@@ -158,7 +159,7 @@ def test_every_director_word_has_a_builder():
     js = (ROOT / "web" / "static" / "js" / "dream")
     builders = (js / "things.js").read_text().split("export const BUILDERS = {")[1].split("};")[0]
     places = (js / "settings.js").read_text().split("const BUILD = {")[1]
-    assert len(kinds) == 40 and len(settings) == 13
+    assert len(kinds) == 41 and len(settings) == 13
     for k in kinds:
         assert re.search(rf"\b{k}\b", builders), f"no 3D builder for '{k}'"
     for s in settings:
@@ -351,3 +352,17 @@ def test_words_the_dream_left_out_fade_from_the_players_line(client):
         ws.send_json({"type": "text", "text": "you are a f***ing dragon", "lang": None})
         lines = [m["text"] for m in _collect(ws, "timings") if m["type"] == "transcript"]
     assert lines == ["you are a f***ing dragon", "you are a … dragon"]
+
+
+def test_hebrew_is_read_for_who_speaks_and_who_listens(client):
+    STATE["spoken"] = []
+    STATE["turn"] = {"reply": "אני מרגישה את הים. מה שלך?", "lang": "he", "voice": "female",
+                     "listener": "female", "scene": {"self": {"form": "fairy"}, "things": []},
+                     "added": [], "changed": [], "removed": [], "effect": "none"}
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef654", "lang": "he"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "אני הולכת לים", "lang": "he"})
+        _until(ws, "timings")
+    spoken = [b for b in STATE["spoken"] if "הים" in b["text"]]
+    assert spoken and all(b["speaker"] == 2 and b["listener"] == 2 for b in spoken)

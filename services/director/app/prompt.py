@@ -101,16 +101,18 @@ BACKDROP_LINE = ('- backdrop: for big scene changes, a short English description
 
 HE_GENDER = {"female": ", speaking of yourself in the feminine (אני מרגישה)",
              "male": ", speaking of yourself in the masculine (אני מרגיש)"}
+HE_PLAYER = {"female": ", and to the player in the feminine (את, שלך, אותך)",
+             "male": ", and to the player in the masculine (אתה, שלך, אותך)"}
 
 
 def _state_block(summary: str, text: str, lang: str, recent: str = "", now: str = "",
-                 gender: str = "", note: str = "") -> str:
+                 gender: str = "", note: str = "", player: str = "") -> str:
     name = LANG_NAMES.get(lang, "English")
     talk = f"[RECENT CONVERSATION]\n{recent}\n\n" if recent else ""
     here = f"Until this moment: {now} The player's words above change it. " if now else ""
     only = {"he": "Hebrew only, with no English words", "en": "English only"}.get(lang, name)
     if lang == "he":
-        only += HE_GENDER.get(gender, "")
+        only += HE_GENDER.get(gender, "") + HE_PLAYER.get(player, "")
     aside = f"({note})\n\n" if note else ""
     return (f"[DREAM STATE]\n{summary}\n\n{talk}[THE PLAYER SAYS, in {name}]\n{text}\n\n{aside}"
             f"{here}List only the new facts in the player's words, answer in {only}, then put all of "
@@ -255,7 +257,8 @@ STRICT_LANG = {
 
 def build_messages(summary: str, history: list[dict], text: str, lang: str,
                    max_history: int = 8, now: str = "", pictures: bool = True,
-                   strict_lang: bool = False, gender: str = "", note: str = "") -> list[dict]:
+                   strict_lang: bool = False, gender: str = "", note: str = "",
+                   player: str = "") -> list[dict]:
     """System prompt and examples stay the same from turn to turn while the language does
     (Ollama reuses their cached tokens); the conversation so far travels inside the last
     message as plain lines, so every answer the model sees from itself is a complete scene
@@ -267,7 +270,7 @@ def build_messages(summary: str, history: list[dict], text: str, lang: str,
         msgs.append({"role": "user", "content": user})
         msgs.append({"role": "assistant", "content": assistant})
     last = _state_block(summary, _clip(text, MAX_SAID), lang, _recent(history, max_history), now,
-                        gender, note)
+                        gender, note, player)
     if strict_lang:
         last += STRICT_LANG.get(lang, STRICT_LANG["en"])
     msgs.append({"role": "user", "content": last})

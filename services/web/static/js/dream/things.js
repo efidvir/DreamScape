@@ -172,7 +172,73 @@ function bird(spec, r, place) {
   }, { height: 0.15 * s });
 }
 
+// Dolphins, whales, sharks and octopuses are drawn as themselves, at their own size.
+const SEA = {
+  dolphin: { words: ['dolphin', 'דולפין'], len: 0.55, r: 0.11, scale: 2.6, color: '#4f7da6', beak: true, dorsal: 0.12 },
+  whale: { words: ['whale', 'לוויתן', 'לווייתן', 'leviathan'], len: 1.1, r: 0.3, scale: 5.5, color: '#34527a', dorsal: 0.05 },
+  shark: { words: ['shark', 'כריש'], len: 0.6, r: 0.12, scale: 2.8, color: '#5c6876', dorsal: 0.2 },
+};
+
+function seaCreature(P, spec, r, place) {
+  // Big already: "huge" makes a whale grander, never a wall that fills the view.
+  const s = P.scale * Math.min(Math.sqrt(SIZE[spec.size] || 1), 1.4);
+  return manyOf(spec, r, place, (i) => {
+    const c = color(spec.color, P.color);
+    const g = new THREE.Group(); const b = new THREE.Group(); b.scale.setScalar(s); g.add(b);
+    // deep colours and little glow: pale, glowing bodies bloom into white blots
+    const mat = solid(c, { glow: 0.18, roughness: 0.45, metalness: 0.15 });
+    const belly = solid('#9fb2c4', { glow: 0.12 });
+    const body = new THREE.Mesh(new THREE.CapsuleGeometry(P.r, P.len, 8, 16), mat);
+    body.rotation.x = Math.PI / 2; body.scale.set(1, 1, 0.85); b.add(body);
+    const under = new THREE.Mesh(new THREE.CapsuleGeometry(P.r * 0.8, P.len * 0.8, 6, 12), belly);
+    under.rotation.x = Math.PI / 2; under.position.y = -P.r * 0.35; under.scale.set(0.9, 1, 0.6); b.add(under);
+    if (P.beak) {
+      const beak = new THREE.Mesh(new THREE.CapsuleGeometry(P.r * 0.32, P.r * 1.1, 4, 8), mat);
+      beak.rotation.x = Math.PI / 2; beak.position.set(0, -P.r * 0.15, P.len / 2 + P.r * 1.1); b.add(beak);
+    }
+    const fin = (w, h) => { const gg = new THREE.BufferGeometry().setFromPoints([v3(0, 0, w * 0.6), v3(0, h, -w * 0.4), v3(0, 0, -w * 0.5)]); gg.computeVertexNormals(); return gg; };
+    const dorsal = new THREE.Mesh(fin(P.r * 1.6, P.r + P.dorsal), solid(c, { glow: 0.18, side: THREE.DoubleSide }));
+    dorsal.position.set(0, P.r * 0.8, -P.len * 0.05); b.add(dorsal);
+    for (const x of [1, -1]) {
+      const pec = new THREE.Mesh(fin(P.r * 1.2, P.r * 1.1), solid(c, { glow: 0.18, side: THREE.DoubleSide }));
+      pec.position.set(x * P.r * 0.8, -P.r * 0.4, P.len * 0.2); pec.rotation.z = x * 2.2; b.add(pec);
+    }
+    const tail = new THREE.Group(); tail.position.z = -P.len / 2 - P.r * 0.6; b.add(tail);
+    for (const x of [1, -1]) {      // flukes, flat like a dolphin's (a shark's stand up)
+      const fl = new THREE.Mesh(fin(P.r * 1.4, P.r * 1.6), solid(c, { glow: 0.18, side: THREE.DoubleSide }));
+      if (P === SEA.shark) fl.rotation.z = x > 0 ? 0 : Math.PI; else fl.rotation.z = x * Math.PI / 2;
+      fl.rotation.x = -0.4; tail.add(fl);
+    }
+    const eye = solid('#101418', { glow: 0 });
+    for (const x of [1, -1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(P.r * 0.1, 6, 4), eye); e.position.set(x * P.r * 0.7, P.r * 0.25, P.len * 0.42); b.add(e); }
+    const ph = i * 1.1;
+    return { group: g, tint: [mat], update: (t) => { tail.rotation.x = Math.sin(t * 3 + ph) * 0.35; b.rotation.x = Math.sin(t * 1.5 + ph) * 0.08; } };
+  }, { height: P.r * 2 * s });
+}
+
+function octopus(spec, r, place) {
+  const s = (SIZE[spec.size] || 1) * 2.2;
+  return manyOf(spec, r, place, (i) => {
+    const c = color(spec.color, '#c0567a');
+    const g = new THREE.Group(); const b = new THREE.Group(); b.scale.setScalar(s); g.add(b);
+    const mat = solid(c, { glow: 0.5 });
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 12), mat); head.scale.set(1, 1.25, 1); head.position.y = 0.32; b.add(head);
+    const arms = [];
+    for (let k = 0; k < 8; k++) {
+      const arm = new THREE.Group(); arm.rotation.y = k * Math.PI / 4; arm.position.y = 0.16; b.add(arm);
+      const seg = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.42, 4, 6), mat); seg.position.set(0, -0.12, 0.2); seg.rotation.x = 1.0; arm.add(seg);
+      arms.push(seg);
+    }
+    const eye = solid('#fff4d6', { glow: 1.2 });
+    for (const x of [1, -1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.035, 6, 4), eye); e.position.set(x * 0.09, 0.34, 0.17); b.add(e); }
+    const ph = i * 0.7;
+    return { group: g, tint: [mat], update: (t) => { arms.forEach((a, k) => { a.rotation.x = 1.0 + Math.sin(t * 2 + k + ph) * 0.35; }); } };
+  }, { height: 0.6 * s });
+}
+
 function fish(spec, r, place) {
+  for (const P of Object.values(SEA)) if (has(spec.label, ...P.words)) return seaCreature(P, spec, r, place);
+  if (has(spec.label, 'octopus', 'תמנון', 'squid', 'דיונון')) return octopus(spec, r, place);
   const s = (SIZE[spec.size] || 1) * 0.9;
   return manyOf(spec, r, place, (i, rr) => {
     const c = color(spec.color, rr.pick(['#ff9f43', '#4fc3f7', '#f06292', '#ffd54f']));
@@ -195,12 +261,16 @@ const ANIMALS = {
   dog: { len: 0.55, r: 0.13, leg: 0.28, head: 0.11, snout: 0.09, ears: 'floppy', tail: 'up', color: '#a5703f' },
   wolf: { len: 0.72, r: 0.15, leg: 0.4, head: 0.13, snout: 0.15, ears: 'pointy', tail: 'bushy', color: '#8d939e' },
   horse: { len: 1.15, r: 0.26, leg: 0.85, head: 0.15, snout: 0.25, ears: 'small', tail: 'long', neck: 0.55, color: '#7a5a43' },
+  bear: { len: 0.8, r: 0.27, leg: 0.34, head: 0.17, snout: 0.09, ears: 'round', tail: 'puff', color: '#6b4630' },
+  rabbit: { len: 0.24, r: 0.12, leg: 0.1, head: 0.1, snout: 0.02, ears: 'long', tail: 'puff', color: '#d8cfc4' },
 };
 
 function quadruped(kind) {
   return (spec, r, place) => {
-    const P = ANIMALS[kind];
-    const s = (SIZE[spec.size] || 1) * (kind === 'horse' ? 1.0 : 1.3);
+    const bear = has(spec.label, 'bear', 'דוב', 'panda', 'פנדה');
+    const rabbit = has(spec.label, 'rabbit', 'bunny', 'hare', 'ארנב');
+    const P = bear ? ANIMALS.bear : rabbit ? ANIMALS.rabbit : ANIMALS[kind];
+    const s = (SIZE[spec.size] || 1) * (kind === 'horse' ? 1.0 : bear ? 1.6 : 1.3);
     const unicorn = kind === 'horse' && has(spec.label, 'unicorn', 'חד-קרן', 'חד קרן');
     const deer = kind === 'horse' && has(spec.label, 'deer', 'stag', 'elk', 'אייל', 'צבי');
     const fox = kind === 'wolf' && has(spec.label, 'fox', 'שועל');
@@ -234,6 +304,12 @@ function quadruped(kind) {
         if (P.ears === 'pointy' || P.ears === 'small') {
           const ear = new THREE.Mesh(new THREE.ConeGeometry(P.head * 0.32, P.head * (P.ears === 'small' ? 0.6 : 0.9), 4), mat);
           ear.position.set(x * P.head * 0.55, P.head * 0.95, -P.head * 0.1); ear.rotation.z = -x * 0.25; head.add(ear);
+        } else if (P.ears === 'round') {
+          const ear = new THREE.Mesh(new THREE.SphereGeometry(P.head * 0.28, 8, 6), mat);
+          ear.position.set(x * P.head * 0.62, P.head * 0.82, -P.head * 0.1); head.add(ear);
+        } else if (P.ears === 'long') {
+          const ear = new THREE.Mesh(new THREE.CapsuleGeometry(P.head * 0.2, P.head * 1.5, 4, 6), mat);
+          ear.position.set(x * P.head * 0.35, P.head * 1.6, -P.head * 0.2); ear.rotation.z = -x * 0.12; head.add(ear);
         } else if (P.ears === 'floppy') {
           const ear = new THREE.Mesh(new THREE.SphereGeometry(P.head * 0.4, 8, 6), mat); ear.scale.set(0.45, 1.2, 0.8);
           ear.position.set(x * P.head * 0.95, P.head * 0.1, -P.head * 0.1); head.add(ear);
@@ -255,7 +331,9 @@ function quadruped(kind) {
       const tail = new THREE.Group(); tail.position.set(0, legH + R * 1.1, -L * 0.55); a.add(tail);
       const tl = P.tail === 'long' ? 0.6 : P.tail === 'bushy' ? 0.4 : 0.35;
       const tr = P.tail === 'bushy' ? R * 0.45 : R * 0.16;
-      const tm = new THREE.Mesh(new THREE.CapsuleGeometry(tr, tl, 3, 6), mat); tm.position.y = tl / 2; tail.add(tm);
+      const tm = P.tail === 'puff' ? new THREE.Mesh(new THREE.SphereGeometry(R * 0.42, 8, 6), mat)
+        : new THREE.Mesh(new THREE.CapsuleGeometry(tr, tl, 3, 6), mat);
+      tm.position.y = P.tail === 'puff' ? 0 : tl / 2; tail.add(tm);
       tail.rotation.x = P.tail === 'up' || P.tail === 'curl' ? -0.5 : P.tail === 'long' ? -2.6 : -2.2;
       if (kind === 'horse') {
         const mane = new THREE.Mesh(new THREE.BoxGeometry(0.05, neckLen * 0.95, 0.12), solid(unicorn ? '#c9b3ff' : '#3b2a20', { glow: unicorn ? 0.9 : 0.1 }));
@@ -773,15 +851,101 @@ function lantern(spec, r, place) {
   }, { color: '#ffb35a', glowSize: 1.4, glow: 0.45, height: 0.5 });
 }
 
+// ------------------------------------------------------------------ volcano
+// A broad mountain with a glowing crater: lava runs down its sides, embers shoot up and fall
+// back, smoke rises, and it lights the dream around it red.
+function volcano(spec, r, place) {
+  const s = (SIZE[spec.size] || 1) * 2.4;
+  const c = color(spec.color, '#ff5a1f');
+  const root = new THREE.Group();
+  const m = new THREE.Group(); m.position.copy(place(0)); root.add(m);
+  const prof = [[0.35, 1.5], [0.55, 1.66], [0.85, 1.48], [1.25, 1.0], [1.8, 0.48], [2.45, 0.1], [2.75, 0]];
+  const cone = new THREE.Mesh(new THREE.LatheGeometry(prof.map(([x, y]) => new THREE.Vector2(x * s, y * s)), 48),
+    solid('#4a332c', { glow: 0.2, emissive: '#7a2410', roughness: 1 }));
+  m.add(cone);
+  const heightAt = (d) => {           // the slope's height at a distance from the axis
+    for (let k = 1; k < prof.length; k++) {
+      const [x0, y0] = prof[k - 1], [x1, y1] = prof[k];
+      if (d / s <= x1) return (y0 + (y1 - y0) * Math.max(0, (d / s - x0) / (x1 - x0))) * s;
+    }
+    return 0;
+  };
+  const top = 1.62 * s;
+  // lava: glowing beads running down a few channels
+  const NL = 260, lava = new Particles(NL, { size: 0.45 * Math.sqrt(s), colorA: '#ffd36a', colorB: c, twinkle: 0.4, seed: 21 });
+  const chan = [0, 1, 2, 3, 4].map(() => r() * 6.283), lLife = new Float32Array(NL).map(() => r());
+  m.add(lava);
+  // embers: shot up out of the crater, falling back
+  const NE = 140, embers = new Particles(NE, { size: 0.22 * Math.sqrt(s), colorA: '#fff3b0', colorB: '#ff6a1a', twinkle: 0.8, seed: 23, map: sparkleTex() });
+  const eLife = new Float32Array(NE).map(() => r()), eVel = new Float32Array(NE * 3);
+  const shoot = (i) => { const a = r() * 6.283, sp = (0.6 + r() * 1.1) * s; eVel.set([Math.cos(a) * sp * 0.35, (1.6 + r() * 1.4) * s, Math.sin(a) * sp * 0.35], i * 3); };
+  for (let i = 0; i < NE; i++) shoot(i);
+  m.add(embers);
+  // smoke: a slow column, spreading as it climbs
+  const NS = 90, smoke = new Particles(NS, { size: 1.1 * s, colorA: '#7a6660', colorB: '#3d3533', twinkle: 0.1, seed: 25, additive: false, opacity: 0.35 });
+  const sLife = new Float32Array(NS).map(() => r());
+  m.add(smoke);
+  const light = new THREE.PointLight(c, 6 * s, 18 * s, 1.4); light.position.y = top + 0.4 * s; m.add(light);
+  const crater = glowSprite(c, 2.6 * s, 0.65); crater.position.y = top; m.add(crater);
+  const update = (t, dt) => {
+    for (let i = 0; i < NL; i++) {
+      lLife[i] += dt * 0.08; if (lLife[i] > 1) lLife[i] -= 1;
+      const a = chan[i % chan.length] + Math.sin(i * 7.1) * 0.06, d = (0.5 + 2.1 * lLife[i]) * s;
+      lava.setBase(i, Math.cos(a) * d, heightAt(d) + 0.04 * s, Math.sin(a) * d);
+    }
+    for (let i = 0; i < NE; i++) {
+      eLife[i] += dt * (0.45 + (i % 7) * 0.05);
+      if (eLife[i] > 1) { eLife[i] -= 1; shoot(i); }
+      const L = eLife[i] * 1.6;
+      embers.setBase(i, eVel[i * 3] * L, top + eVel[i * 3 + 1] * L - 2.6 * s * L * L, eVel[i * 3 + 2] * L);
+    }
+    for (let i = 0; i < NS; i++) {
+      sLife[i] += dt * 0.05; if (sLife[i] > 1) sLife[i] -= 1;
+      const L = sLife[i], a = i * 2.39996;
+      smoke.setBase(i, Math.cos(a) * L * 1.6 * s + L * 1.2 * s, top + L * 6 * s, Math.sin(a) * L * 1.6 * s);
+    }
+    lava.touch(); lava.tick(t); embers.touch(); embers.tick(t); smoke.touch(); smoke.tick(t);
+    light.intensity = 6 * s * (0.75 + 0.3 * Math.sin(t * 5.3) * Math.sin(t * 2.1));
+    crater.material.opacity = 0.55 + 0.15 * Math.sin(t * 3.7);
+  };
+  return { root, members: [], height: top, update, tintables: [] };
+}
+
 // ------------------------------------------------------------------ the unknown
+// Something the dream has no shape for yet: a slow glowing cloud of its colour, big enough
+// to see, turning over as if it were still taking form.
+const GUESS = [
+  ['volcano', ['volcano', 'lava', 'הר געש', 'לבה']],
+  ['fish', ['dolphin', 'whale', 'shark', 'octopus', 'דולפין', 'לוויתן', 'לווייתן', 'כריש', 'תמנון']],
+  ['wolf', ['bear', 'דוב']], ['cat', ['rabbit', 'bunny', 'ארנב', 'lion', 'tiger', 'אריה', 'נמר']],
+  ['tree', ['tree', 'עץ']], ['house', ['house', 'בית']], ['castle', ['tower', 'castle', 'מגדל', 'טירה']],
+];
+export function guessKind(label) {
+  for (const [kind, words] of GUESS) if (has(label, ...words)) return kind;
+  return null;
+}
+
 function other(spec, r, place) {
-  return floating(spec, r, place, (b, c, rr) => {
-    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), new THREE.MeshBasicMaterial({ color: c, wireframe: true, transparent: true, opacity: 0.6, blending: THREE.AdditiveBlending, depthWrite: false }));
-    const inner = glowSprite(c, 0.7, 0.9);
-    const rings = [0, 1].map((k) => { const m = new THREE.Mesh(new THREE.TorusGeometry(0.45 + k * 0.1, 0.008, 6, 64), glowMat(c, 0.7)); m.rotation.x = k ? 1.2 : 0.3; b.add(m); return m; });
-    b.add(core, inner);
-    return { tint: [], update: (t) => { core.rotation.y = t * 0.4; core.rotation.x = t * 0.25; rings[0].rotation.y = t * 0.6; rings[1].rotation.z = t * 0.5; } };
-  }, { color: '#cbb8ff', glowSize: 2, glow: 0.4, sparkles: 16, height: 0.6 });
+  // Its size grows gently with "large" and "huge", so it never becomes a wall of light.
+  const k = Math.min(Math.sqrt(SIZE[spec.size] || 1), 1.6) * 1.5;
+  const c = color(spec.color, '#cbb8ff');
+  const pale = c.clone().lerp(new THREE.Color('#ffffff'), 0.35);
+  return manyOf(spec, r, place, (i, rr) => {
+    const g = new THREE.Group(); const b = new THREE.Group(); b.scale.setScalar(k); g.add(b);
+    const n = 220;
+    const cloud = new Particles(n, { size: 0.16, colorA: c, colorB: pale, twinkle: 0.7, seed: 31 + i, opacity: 0.8 });
+    for (let j = 0; j < n; j++) {
+      const a = rr() * 6.283, z = 2 * rr() - 1, d = 0.7 * Math.cbrt(rr());
+      cloud.setBase(j, d * Math.sqrt(1 - z * z) * Math.cos(a), d * z, d * Math.sqrt(1 - z * z) * Math.sin(a));
+    }
+    const core = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 2), solid(c, { glow: 0.5 }));
+    b.add(cloud, core);
+    g.add(glowSprite(c, 1.8 * k, 0.25));
+    return { group: g, tint: [core.material], update: (t) => {
+      cloud.rotation.y = t * 0.25; cloud.rotation.x = Math.sin(t * 0.3 + i) * 0.4; cloud.touch(); cloud.tick(t);
+      core.rotation.y = -t * 0.2;
+    } };
+  }, { height: 0.8 * k });
 }
 
 // The nameless spark the dreamer starts as.
@@ -817,10 +981,10 @@ export const BUILDERS = {
   fire: flora.fire, water: flora.water,
   moon: moonThing, sun, planet, star: stars, rainbow,
   house, castle, portal, spaceship, boat, lantern,
-  cheese, food, gem, crown, key, book, sword, orb, other,
+  cheese, food, gem, crown, key, book, sword, orb, volcano, other,
 };
 
 // Rough category for placement.
-export const GROUND_KINDS = new Set(['tree', 'flower', 'mushroom', 'rock', 'crystal', 'fire', 'water', 'house', 'castle', 'portal', 'cat', 'dog', 'wolf', 'horse', 'person']);
+export const GROUND_KINDS = new Set(['tree', 'flower', 'mushroom', 'rock', 'crystal', 'fire', 'water', 'house', 'castle', 'portal', 'cat', 'dog', 'wolf', 'horse', 'person', 'volcano']);
 export const SKY_KINDS = new Set(['moon', 'sun', 'planet', 'star', 'rainbow', 'cloud']);
 export { softDot };

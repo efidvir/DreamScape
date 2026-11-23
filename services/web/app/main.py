@@ -47,6 +47,7 @@ class NotReady(Exception):
 
 # A dream's id as the storyteller accepts it; a page that sends anything else gets a new one.
 SESSION_ID = re.compile(r"[A-Za-z0-9_-]{6,64}")
+GENDER = {"male": 1, "female": 2}
 MAX_CHARS = 1500          # characters of the player's words that one turn takes
 
 
@@ -214,6 +215,7 @@ class Dreamer:
         self.session = uuid.uuid4().hex     # until the page names its own dream
         self.lang = "he"
         self.voice = "neutral"
+        self.listener = ""                  # the player's gender as the dreamer speaks to them
         self.last_reply = ""
         self.busy = False
         self.audio_meta: dict | None = None
@@ -258,6 +260,7 @@ class Dreamer:
                              "offline": True, "scene": None, "lang": self.lang})
             return
         self.voice = d.get("voice", "neutral")
+        self.listener = d.get("listener", "")
         self.lang = d.get("lang", self.lang)
         self.last_reply = d.get("reply", "")
         await self.send({"type": "session", "session": self.session, "resumed": d.get("resumed"),
@@ -344,6 +347,7 @@ class Dreamer:
                         # sentence as soon as it is complete, then the rest.
                         self.lang = ev.get("lang", self.lang)
                         self.voice = ev.get("voice") or self.voice
+                        self.listener = ev.get("listener", self.listener)
                         words = ev["text"] if kind == "first" else ev["reply"]
                         if kind == "first" and first is not None:
                             continue
@@ -382,6 +386,7 @@ class Dreamer:
             if not d.get("fallback"):
                 lang = d.get("lang", self.lang)
                 self.lang, self.voice = lang, d.get("voice", self.voice)
+                self.listener = d.get("listener", self.listener)
                 if d.get("scene"):
                     await self.send({"type": "scene", "scene": d["scene"], "added": d.get("added", []),
                                      "changed": d.get("changed", []), "removed": d.get("removed", []),
@@ -488,7 +493,9 @@ class Dreamer:
         first = None
         for part in split_for_speech(text):
             try:
-                body = {"text": part, "lang": lang, "voice": self.voice}
+                # Hebrew reads gendered words by who speaks and who listens (1 male, 2 female).
+                body = {"text": part, "lang": lang, "voice": self.voice,
+                        "speaker": GENDER.get(self.voice, 0), "listener": GENDER.get(self.listener, 0)}
                 try:
                     r = await http.post(f"{VOICE_URL}/tts", json=body, timeout=60)
                 except httpx.TransportError:    # a pooled connection the server had closed
@@ -595,6 +602,18 @@ async def debug_voice_device(request: Request):
     try:
         r = await http.post(f"{VOICE_URL}/debug/device", content=await request.body(), timeout=180,
                             headers={"content-type": "application/json"})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+    return Response(r.content, status_code=r.status_code,
+                    media_type=r.headers.get("content-type", "application/json"))
+
+
+@app.get("/api/debug/voice/g2p")
+async def debug_voice_g2p(text: str, speaker: int = 0, listener: int = 0):
+    """Pass-through to the voice service: how it reads Hebrew, as IPA."""
+    try:
+        r = await http.get(f"{VOICE_URL}/debug/g2p", timeout=60,
+                           params={"text": text, "speaker": speaker, "listener": listener})
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
     return Response(r.content, status_code=r.status_code,
