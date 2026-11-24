@@ -14,6 +14,7 @@ import json
 import math
 import re
 import struct
+from pathlib import Path
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
@@ -200,13 +201,11 @@ async def ihealth():
     return {"service": "imagery", "status": "ok", "detail": "fake painter", "workers": 1}
 
 
-@imagery.post("/imagine")
-async def imagine(req: Request):
+def _picture(prompt: str, kind: str):
+    """A simple glowing picture of the prompt (a PIL image), no AI."""
     import colorsys
     import hashlib
     from PIL import Image, ImageDraw, ImageFilter
-    body = await req.json()
-    prompt, kind = body.get("prompt", ""), body.get("kind", "sprite")
     h = int(hashlib.md5(prompt.encode()).hexdigest()[:6], 16)
     hue = (h % 360) / 360
     named = {"gold": 0.13, "cheese": 0.14, "silver": 0.58, "fairy": 0.55, "green": 0.33, "purple": 0.78, "blue": 0.6}
@@ -219,7 +218,7 @@ async def imagine(req: Request):
         im = Image.new("RGB", (W, W)); d = ImageDraw.Draw(im)
         for y in range(W):
             d.line([(0, y), (W, y)], fill=tuple(int(c * (0.25 + 0.6 * y / W)) for c in rgb(0.45, 0.5)))
-        return Response(content=_png(im.filter(ImageFilter.GaussianBlur(6))), media_type="image/png")
+        return im.filter(ImageFilter.GaussianBlur(6))
     im = Image.new("RGB", (W, W), "black"); d = ImageDraw.Draw(im)
     p = prompt.lower()
     if "cheese" in p:
@@ -235,8 +234,45 @@ async def imagine(req: Request):
         for k in range(7):
             r = 160 - k * 20
             d.ellipse([256 - r, 256 - r, 256 + r, 256 + r], fill=rgb(0.25 + k * 0.08))
-    im = im.filter(ImageFilter.GaussianBlur(3))
-    return Response(content=_png(im), media_type="image/png")
+    return im.filter(ImageFilter.GaussianBlur(3))
+
+
+@imagery.post("/imagine")
+async def imagine(req: Request):
+    body = await req.json()
+    return Response(content=_png(_picture(body.get("prompt", ""), body.get("kind", "sprite"))), media_type="image/png")
+
+
+@imagery.post("/paint")
+async def paint(req: Request):
+    """The painter's packed paintings (services/imagery/app/relief.py), from the simple
+    pictures above: depth is guessed from brightness, a place is sky, hills and water."""
+    import sys
+    import numpy as np
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "services" / "imagery"))
+    from app import relief
+    body = await req.json()
+    prompt, kind = body.get("prompt", ""), body.get("kind", "thing")
+    if kind == "scene":
+        W, H = 1024, 512
+        y, x = np.mgrid[0:H, 0:W].astype(np.float32)
+        u, v = x / W, y / H
+        top = np.array(_picture(prompt, "sprite").resize((1, 1)).getpixel((0, 0)), np.float32) / 255
+        ridge = 0.5 - 0.08 * np.sin(u * 9.3) - 0.04 * np.sin(u * 23.1 + 1)
+        sky = (0.15 + 0.5 * v[..., None]) * (0.5 + top)
+        hills = np.array([0.18, 0.2, 0.32]) + 0.15 * top
+        water = np.array([0.1, 0.22, 0.38]) * (1 + 0.25 * np.sin(u * 120 + v * 260))[..., None]
+        rgb = np.where((v < ridge)[..., None], sky, np.where((v < 0.62)[..., None], hills, water))
+        near = np.where(v < ridge, 0.0, np.where(v < 0.62, 0.3, 0.35 + 0.65 * (v - 0.62) / 0.38))
+        alpha = np.ones((H, W), np.float32)
+    else:
+        rgb = np.asarray(_picture(prompt, "sprite"), np.float32) / 255
+        lum = rgb @ relief.LUMA
+        alpha = relief.smoothstep(0.04, 0.16, relief.blur(lum, 2)) * relief.frame(*lum.shape)
+        near = relief.normalize_depth(relief.blur(lum, 14), alpha)
+    angle, detail = relief.orientation(rgb.astype(np.float32))
+    png = relief.pack(np.clip(rgb, 0, 1), alpha, near.astype(np.float32), angle, detail)
+    return Response(content=png, media_type="image/png")
 
 
 def _png(im) -> bytes:
