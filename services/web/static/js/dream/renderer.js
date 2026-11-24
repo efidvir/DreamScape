@@ -102,6 +102,7 @@ export class DreamRenderer {
     this.composer.setSize(w, h);
     this.dreamPass.uniforms.uAspect.value = w / h;
     dreamU.uViewH.value = h * this.pixelRatio;
+    dreamU.uAspect.value = w / h;
   }
 
   // ------------------------------------------------------------------ cues from the world
@@ -184,7 +185,8 @@ export class DreamRenderer {
   // Keep it smooth on weaker GPUs: lower resolution, then drop depth-of-field.
   watchSpeed(dt, gap = 0) {
     this.frames++;
-    const slow = dt > Math.max(1 / 32, gap * 1.5);
+    // (a browser holding a page at 30 frames a second, on battery or out of focus, is not slow)
+    const slow = dt > Math.max(1 / 26, gap * 1.5);
     if (slow) this.slowFor += dt; else this.slowFor = Math.max(0, this.slowFor - dt * 0.5);
     if (this.slowFor > 4 && this.frames > 240) {
       this.slowFor = 0;

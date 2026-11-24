@@ -166,34 +166,73 @@ def test_every_director_word_has_a_builder():
         assert re.search(rf"^  {s}\(r", places, re.M), f"no landscape for '{s}'"
 
 
-def test_pictures_are_requested_for_new_things_and_the_dreamer(client, monkeypatch):
-    monkeypatch.setattr(main, "IMAGERY_URL", "http://imagery")
-    main.monitor.status["imagery"] = {"status": "ok"}
-    asked = []
-
+def picture_backend(asked, paint_status=200):
     def backend(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/imagine":
-            asked.append(request.read().decode())
+        if request.url.path in ("/paint", "/imagine"):
+            asked.append((request.url.path, json.loads(request.read().decode())))
+            if request.url.path == "/paint" and paint_status != 200:
+                return httpx.Response(paint_status)
             return httpx.Response(200, content=b"\x89PNG fake", headers={"content-type": "image/png"})
         if request.url.path == "/turn/stream":
             return ndjson({
                 "reply": "A cheese!", "lang": "en", "voice": "female", "backdrop": "",
-                "scene": {"setting": {"kind": "moon"}, "self": {"form": "fairy", "label": "silver fairy", "color": "silver"},
+                "scene": {"setting": {"kind": "moon", "time": "night", "weather": "clear"},
+                          "self": {"form": "fairy", "label": "silver fairy", "color": "silver"},
                           "things": [{"id": "cheese", "kind": "cheese", "label": "glowing cheese", "color": "gold", "count": 1},
                                      {"id": "trees", "kind": "tree", "label": "", "color": "", "count": 20}]},
                 "added": ["cheese", "trees"], "changed": [], "removed": [], "effect": "none"})
         return fake_backend(request)
+    return backend
 
-    monkeypatch.setattr(main, "http", httpx.AsyncClient(transport=httpx.MockTransport(backend)))
+
+def test_new_things_the_dreamer_and_the_place_are_painted(client, monkeypatch):
+    monkeypatch.setattr(main, "IMAGERY_URL", "http://imagery")
+    main.monitor.status["imagery"] = {"status": "ok"}
+    main.pictures.clear()
+    asked = []
+    monkeypatch.setattr(main, "http", httpx.AsyncClient(transport=httpx.MockTransport(picture_backend(asked))))
     with client.websocket_connect("/ws") as ws:
         ws.send_json({"type": "hello", "session": "abcdef789", "lang": "en"})
         _until(ws, "audio")
         ws.send_json({"type": "text", "text": "there is cheese", "lang": None})
-        got = {_until(ws, "sprite")["id"], _until(ws, "sprite")["id"]}
-    assert got == {"cheese", "self"}
-    assert any("gold cheese" in a or "glowing cheese" in a for a in asked)
-    assert not any('"trees"' in a for a in asked)          # groves stay procedural
+        sprites = [_until(ws, "sprite"), _until(ws, "sprite")]
+        place = _until(ws, "backdrop")
     main.monitor.status["imagery"] = {"status": "off"}
+    assert {m["id"] for m in sprites} == {"cheese", "self"}
+    assert all(m["relief"] and m["url"].startswith("/media/") for m in sprites)
+    assert place["relief"] and place["place"] == "moon" and "moon" in place["prompt"] and "night" in place["prompt"]
+    bodies = {b["prompt"]: b for path, b in asked if path == "/paint"}
+    cheese = next(b for p, b in bodies.items() if "cheese" in p)
+    assert cheese["kind"] == "thing" and cheese["priority"] == 0           # what the player named, first
+    assert bodies["silver fairy"]["priority"] == 1
+    assert next(b for p, b in bodies.items() if "moon" in p) ["kind"] == "scene"
+    assert not any("tree" in p for p in bodies)                            # groves stay procedural
+    assert all(path == "/paint" for path, _ in asked)
+
+
+def test_an_older_imagery_service_still_gives_plain_pictures(client, monkeypatch):
+    monkeypatch.setattr(main, "IMAGERY_URL", "http://imagery")
+    main.monitor.status["imagery"] = {"status": "ok"}
+    main.pictures.clear()
+    asked = []
+    monkeypatch.setattr(main, "http", httpx.AsyncClient(
+        transport=httpx.MockTransport(picture_backend(asked, paint_status=404))))
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef790", "lang": "en"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "there is cheese", "lang": None})
+        got = {_until(ws, "sprite")["id"], _until(ws, "sprite")["id"]}
+    main.monitor.status["imagery"] = {"status": "off"}
+    assert got == {"cheese", "self"}
+    assert {b["kind"] for path, b in asked if path == "/imagine"} >= {"sprite"}
+
+
+def test_places_are_described_for_the_painter():
+    assert main.place_prompt({"kind": "ocean", "time": "dusk", "weather": "mist"}) == \
+        "the open ocean, waves to the horizon, at dusk, misty"
+    assert main.place_prompt({"kind": "forest", "time": "day", "weather": "clear"}) == "a deep old forest, in daylight"
+    assert main.place_prompt({"kind": "void"}) == ""
+    assert main.place_prompt({"kind": "void"}, "a starlit lake") == "a starlit lake"
 
 
 def test_first_sentence_is_split_off_when_long_enough():

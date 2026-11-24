@@ -61,7 +61,7 @@ function makeGround(opts) {
   const mat = dreamify(new THREE.MeshStandardMaterial({ vertexColors: true, roughness: opts.rough ?? 0.95, metalness: 0,
     emissive: color(opts.color), emissiveIntensity: opts.glow ?? 0.06, flatShading: !!opts.flat }), opts.seam || '#9fc4ff');
   const ground = new THREE.Mesh(geo, mat);
-  ground.userData.points = { count: opts.points ?? 60000, weight: (x, z) => 1 / (1 + (Math.hypot(x, z) / 13) ** 2), sizeByDistance: 8, size: 1.2, maxSize: 0.3, wander: 0.35, thickness: 0.04, warp: 0 };
+  ground.userData.points = { count: opts.points ?? 60000, weight: (x, z) => 1 / (1 + (Math.hypot(x, z) / 13) ** 2), sizeByDistance: 8, size: 1.4, maxSize: 0.34, wander: 0.35, thickness: 0.04, warp: 0, flow: 0.07, swirl: 3 };
   return ground;
 }
 

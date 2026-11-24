@@ -1,6 +1,6 @@
 # DreamScape
 
-A voice-driven lucid dream. You talk to a being that has just woken up in black mist and knows nothing about itself. Whatever you tell it becomes true: it becomes a fairy, the mist becomes a dark forest, it builds a spaceship, flies to the moon, finds a block of cheese… Every turn the dream grows on screen in live 3D, drawn entirely in soft particles: things gather out of the fog as glowing dust, sharpen for a moment, and drift back into haze, like a dream half remembered.
+A voice-driven lucid dream. You talk to a being that has just woken up in black mist and knows nothing about itself. Whatever you tell it becomes true: it becomes a fairy, the mist becomes a dark forest, it builds a spaceship, flies to the moon, finds a block of cheese… Every turn the dream grows on screen in live 3D, painted in brush strokes that stand in space: things gather out of the fog, sharpen for a moment, and drift back into haze, like a dream half remembered.
 
 Everything runs locally on one GPU laptop, as a set of Docker containers that report their heartbeats to each other. Hebrew and English both work: speech in, speech out, and the story itself.
 
@@ -12,8 +12,8 @@ flowchart LR
   W -- "recorded speech" --> V["voice<br/>Whisper STT · BlueTTS"]
   W -- "player's words" --> D["director<br/>story memory, scene"]
   D -- "chat + JSON schema" --> O["ollama<br/>Gemma 4 E4B"]
-  W -. "optional" .-> I["imagery<br/>Dask scheduler"]
-  I -. "Dask" .-> G["GPU worker<br/>second machine"]
+  W -- "things, places" --> I["imagery<br/>painter, Dask scheduler"]
+  I -. "optional" .-> G["GPU worker<br/>second machine"]
 ```
 
 1. You hold the glowing orb (or the space bar) and speak. The browser sends the recording to **web**.
@@ -24,12 +24,12 @@ flowchart LR
 
 ### How the dream is drawn
 
-Everything on screen is a particle cloud. The renderer knows 13 settings (void, forest, meadow, desert, ocean, mountains, cave, city, space, moon, clouds, snow, underwater) and 40 kinds of things (fairy, dragon, unicorn, castle, spaceship, cheese, portal, crystals, volcano…), each with colour, size, count, placement and motion. Each one is shaped in 3D, then sampled into thousands of soft particles. Its hard geometry is never drawn.
+Everything on screen is made of brush strokes: soft, elongated splats, each turned along the surface it paints and streaked with bristles, overlapping so their colours blend like paint. The renderer knows 13 settings (void, forest, meadow, desert, ocean, mountains, cave, city, space, moon, clouds, snow, underwater) and 40 kinds of things (fairy, dragon, unicorn, castle, spaceship, cheese, portal, crystals, volcano…), each with colour, size, count, placement and motion. Each one is shaped in 3D, then sampled into thousands of strokes. Its hard geometry is never drawn.
 
 - **Appearing and vanishing:** particles stream in from the surrounding mist when a thing appears and scatter back when it goes. When the dreamer changes form, one cloud dissolves while the next gathers in the same place.
 - **Haze:** the dream breathes between hazy and clear. In the haze, particles drift loose and shapes soften, and some dust always floats off the edges.
 - **Focus:** each particle blurs by its own distance from the point of attention, like a camera lens. The lens follows whatever just appeared.
-- **Pictures (with the imagery service on):** every new thing and every new form of the dreamer also gets a generated picture. The picture is sampled into its own particle cloud, which takes over from the geometric one, so the dream looks painted.
+- **Paintings:** every new thing, every new form of the dreamer and every new place is also painted by an image model (SD-Turbo) in the **imagery** service. A matting model finds the thing in its painting and a depth model (Depth Anything V2) reads how near each part of it is; the brush direction at every point comes from the painting's own contours. The page lays the painting down stroke by stroke in 3D: a loose underpainting first, then small strokes where the picture is busy, each standing as near as the depth says, with the edges coming apart in fragments. A painted thing takes over from its sketch and turns slowly to face you, so its relief shows as the view drifts. A painted place stands round the dreamer like the inside of a bowl, the sky farthest away, and the sky, fog and light take their colours from it. The sketch shows at once; its painting follows a few seconds later.
 
 Some kinds take their shape from the word that named them: a fish labelled dolphin, whale, shark or octopus is drawn as one, at its own size, and a bear or a rabbit gets its own build. A volcano runs with lava, throws embers and smoke, and erupts as it appears. When the storyteller files something as "other", the director reads its label with the same Hebrew and English word lists (plurals and feminine forms included, so "דולפינים" and "דולפינה" are dolphins) and draws it as the kind it names. Anything still outside the vocabulary appears as a slowly turning glow of its colour until its picture arrives.
 
@@ -105,20 +105,25 @@ The dream page shares the graphics card with the storyteller, so while an answer
 | `TTS_DEVICE` | `cpu` | `cuda` runs the voice on the GPU (it falls back to the CPU by itself if the GPU runtime cannot start). `POST /api/debug/voice/device` with `{"device": "cuda"}` or `"cpu"` switches a running game, to compare |
 | `TTS_GPU_MB` | `900` | Video memory the GPU voice may use |
 | `LLM_NUM_THREAD` | `0` | Processor threads for the parts of the model that run on the CPU (0: Ollama decides) |
-| `COMPOSE_PROFILES` | empty | `imagery` turns on the picture service |
-| `IMAGERY_URL` | empty | `http://imagery:9030` when the picture service is on |
+| `IMAGERY_DEVICE` | `cpu` | Where the paintings are made on this machine: `cpu` keeps the graphics card for the storyteller and the voices (a thing takes a few seconds, a place a little longer); `cuda` for a card with 3 GB to spare, together with `IMAGERY_TORCH=cu126` (a 5 GB larger image) |
+| `IMAGERY_THREADS` | `0` | Processor threads for painting (0: half the processors, less two). Painting runs at a lower priority than everything else |
+| `IMAGERY_URL` | `http://imagery:9030` | Set it empty to turn the paintings off (with `IMAGERY_LOCAL=0`, the painter stays idle) |
+| `DASK_BIND` | `127.0.0.1` | `0.0.0.0` lets a GPU worker on your network join (only on a network you trust: the scheduler runs whatever its workers are sent) |
 
 Choose the page language at the bottom (Auto, עברית, English). In Auto the dreamer answers in whatever language you speak.
 
-## Pictures from the second GPU machine (recommended)
+## Paintings
 
-The imagery service runs a Dask scheduler on the laptop. Your other GPU machine joins it as a worker and paints a picture with SD-Turbo for every new thing in the dream (plus a soft backdrop for each new place), so the laptop's video memory stays free. The page turns each picture into particles, so this is what gives the dream its painted look.
+The imagery service paints on the laptop's processor out of the box. The first start downloads about 3 GB of models (SD-Turbo, the tiny autoencoder, Depth Anything V2 Small and the matting model) into the `models` volume and keeps about 6 GB of memory for them. Finished paintings are kept on disk (the last 400), so a thing or a place dreamt before appears at once. `GET /healthz` on the imagery service (or the dots on the page) shows its state and how long the last painting took, stage by stage. SD-Turbo comes under Stability AI's licence (see stability.ai/license before any commercial use); Depth Anything V2 Small and the matting model (u2net) are Apache-2.0, the tiny autoencoder MIT.
+
+### From the second GPU machine (faster)
+
+The imagery service also runs a Dask scheduler. Another GPU machine can join it as a worker; from then on it does the painting, many times faster, and the laptop's processor stays free.
 
 On the laptop, in `.env`:
 
 ```
-COMPOSE_PROFILES=imagery
-IMAGERY_URL=http://imagery:9030
+DASK_BIND=0.0.0.0
 ```
 
 On the second machine, copy the repository and run:
@@ -150,22 +155,22 @@ services/
     static/js/dream/   Three.js dream: renderer, world, settings, things
   director/   game master over Ollama: prompt, JSON schema, story state (+ tests)
   voice/      faster-whisper STT and BlueTTS TTS
-  imagery/    SD-Turbo pictures through Dask (one image for scheduler and worker)
+  imagery/    the painter: SD-Turbo, matting and depth, packed for the page; Dask for a GPU worker
 worker/       compose file for the second GPU machine
 dev/          GPU-free demo, fakes and screenshot script
 start.bat     Windows: start everything and open the page
 docker-compose.override.yml   live code from this folder (see "Live code")
 ```
 
-Run the director's tests with `cd services/director && pip install -r requirements-dev.txt && pytest`.
+Each service has its own tests: `cd services/<director|web|voice|imagery> && pip install -r requirements-dev.txt && pytest` (the imagery tests check the painter's maths and API without the models).
 
 ## What changed from the first version
 
-- The dream is drawn live in the browser with Three.js as soft particle clouds, with generated pictures turned into particles when the imagery service runs. The first version generated a video clip on every turn, which was the slow part.
+- The dream is drawn live in the browser with Three.js in brush strokes, with each thing and place painted by an image model and stood up in 3D by its depth. The first version generated a video clip on every turn, which was the slow part.
 - One language-model call per turn returns both the reply and the scene, as schema-checked JSON, with the story's facts carried between turns. TinyLlama gave way to Gemma 4 E4B, which tells a coherent story in natural Hebrew and English (Gemma 3 4B remains a lighter option).
 - Speech is fully local: Whisper fine-tuned for Hebrew by ivrit.ai, and BlueTTS for Hebrew and English voices. The dreamer starts with a neutral voice and takes on a gendered one when the story decides.
 - Every service reports a heartbeat; the web service gathers them and shows them on the page, and Docker health checks watch each container.
-- Image generation moved to a separate, optional service that keeps the Dask route to the second machine.
+- Image generation moved to its own service, which paints on the laptop's processor and keeps the Dask route to the second machine.
 - The game says plainly what is still loading and keeps the player's words until it is ready, instead of answering in character that it heard nothing. Failed turns never enter the story, and dreams saved with old fallback lines are cleaned when they load.
 - Recordings are decoded with PyAV directly: faster-whisper's own decoder breaks on current PyAV releases.
 - The dreamer's words stream out of the language model as soon as they are written, and its first sentence is voiced on its own, which halves the wait before it speaks.

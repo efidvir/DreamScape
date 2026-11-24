@@ -4,12 +4,13 @@
 import * as THREE from 'three';
 import { BUILDERS, GROUND_KINDS, SKY_KINDS, wisp, guessKind } from './things.js';
 import { buildSetting, palette } from './settings.js';
-import { pointify, dreamU, imageCloud } from './points.js';
+import { pointify, dreamU, imageCloud, reliefCloud, reliefTwin, paintedSurround } from './points.js';
 import { rng, color, collectFade, applyFade, disposeDeep, Particles, mistTex, softDot, snoise, glowSprite, sparkleTex, dreamClock } from './kit.js';
 
 const FADE_IN = 3.6, FADE_OUT = 2.6;
 const _tmpC = new THREE.Color();
 const ease = (x) => x * x * (3 - 2 * x);
+const _Y = new THREE.Vector3(0, 1, 0), _hp = new THREE.Vector3(), _yq = new THREE.Quaternion(), _ws = new THREE.Vector3();
 
 function layout(where, kind, i, n, r, heightAt, size = 'medium') {
   const ground = GROUND_KINDS.has(kind);
@@ -143,12 +144,23 @@ class Entity {
     if (this.pictureFade > 0) {
       this.pictureFade = Math.min(1, this.pictureFade + dt / 3.5);
       const k = ease(this.pictureFade);
-      for (const f of this.fades) for (const m of f.points) m.userData.dreamPoints.uOpacity.value *= 1 - 0.82 * k;
+      // the painting becomes the thing; its sketch stays only as a faint aura
+      const keep = this.pictureRelief ? 0.93 : 0.82;
+      for (const f of this.fades) for (const m of f.points) m.userData.dreamPoints.uOpacity.value *= 1 - keep * k;
       const cam = this.world.dream.camera, q = new THREE.Quaternion();
       for (const p of this.pictures) {
         p.u.uForm.value = k * e; p.u.uOpacity.value = Math.min(1, k * e * 1.4) * (0.8 + 0.2 * flicker);
-        p.u.uWander.value = 0.7 * (0.6 + 1.4 * (1 - flicker));
-        p.holder.parent.getWorldQuaternion(q); p.holder.quaternion.copy(q.invert().multiply(cam.quaternion));
+        p.u.uWander.value = (p.relief ? 0.4 : 0.7) * (0.6 + 1.4 * (1 - flicker));
+        p.holder.parent.getWorldQuaternion(q);
+        if (!p.relief) { p.holder.quaternion.copy(q.invert().multiply(cam.quaternion)); continue; }
+        // A painted thing turns to face the dreamer slowly, never more than a little away,
+        // so its relief shows as the view drifts round it.
+        p.holder.getWorldPosition(_hp);
+        const want = Math.atan2(cam.position.x - _hp.x, cam.position.z - _hp.z);
+        if (p.yaw === undefined) p.yaw = want;
+        const off = Math.atan2(Math.sin(want - p.yaw), Math.cos(want - p.yaw));
+        p.yaw += Math.abs(off) > 0.4 ? off - Math.sign(off) * 0.4 : off * Math.min(1, dt * 0.2);
+        p.holder.quaternion.copy(q.invert().multiply(_yq.setFromAxisAngle(_Y, p.yaw)));
       }
     }
     this.root.visible = this.fade > 0.001;
@@ -235,6 +247,7 @@ export class World {
     this.voice = 0; this.thinking = false; this.clarityNow = 0.15;
     this.settingKind = 'void'; this.settingKey = '';
     this.setting = null; this.oldSettings = [];
+    this.surrounds = []; this.painted = null; this.paintK = 0;   // painted places around the dreamer
     this.heightAt = () => 0;
     this.effects = [];
     this.pal = palette('void', 'night', 'mist'); this.palTo = this.pal;
@@ -249,11 +262,28 @@ export class World {
       side: THREE.BackSide, depthWrite: false, fog: false,
       uniforms: { uTop: { value: this.pal.skyTop.clone() }, uHorizon: { value: this.pal.skyHorizon.clone() }, uTime: { value: 0 } },
       vertexShader: 'varying vec3 vD; void main(){ vD = normalize(position); gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+      // A painted sky: the gradient laid on in long brush streaks that swirl along a slow
+      // flow (averaging noise along the flow leaves streaks across it), like oil on canvas.
       fragmentShader: `uniform vec3 uTop, uHorizon; uniform float uTime; varying vec3 vD;
-        void main(){ float h = vD.y; vec3 c = mix(uHorizon, uTop, smoothstep(-0.05, 0.55, h));
+        float h3(vec3 p){ p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+        float n3(vec3 x){ vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(mix(h3(i), h3(i + vec3(1,0,0)), f.x), mix(h3(i + vec3(0,1,0)), h3(i + vec3(1,1,0)), f.x), f.y),
+                     mix(mix(h3(i + vec3(0,0,1)), h3(i + vec3(1,0,1)), f.x), mix(h3(i + vec3(0,1,1)), h3(i + vec3(1,1,1)), f.x), f.y), f.z); }
+        void main(){
+          vec3 d = normalize(vD); float h = d.y;
+          vec3 drift = vec3(uTime * 0.004, 0.0, uTime * 0.003);
+          vec3 w = vec3(n3(d * 1.7 + drift), n3(d * 1.7 + 5.2), n3(d * 1.7 + 9.4)) - 0.5;
+          vec3 flow = normalize(cross(d, w) + 1e-4);
+          float streak = 0.0;
+          for (int i = -3; i <= 3; i++) streak += n3(d * 26.0 + flow * float(i) * 0.9 + 3.0);
+          streak = streak / 7.0;
+          float bend = n3(d * 3.0 + 1.3) - 0.5;
+          float t = smoothstep(-0.05, 0.55, h + bend * 0.16 + (streak - 0.5) * 0.12);
+          vec3 c = mix(uHorizon, uTop, t);
           c = mix(c, uHorizon * 0.6, smoothstep(0.0, -0.4, h));
-          float swirl = sin(vD.x * 6.0 + uTime * 0.05) * sin(vD.z * 5.0 - uTime * 0.04) * 0.025;
-          gl_FragColor = vec4(c + swirl * uHorizon, 1.0); }`,
+          c *= 0.9 + 0.22 * streak;
+          c += (uHorizon - c) * 0.12 * smoothstep(0.55, 0.8, n3(d * 7.0 + flow * 0.5));
+          gl_FragColor = vec4(c, 1.0); }`,
     });
     this.sky = new THREE.Mesh(new THREE.SphereGeometry(460, 32, 20), this.skyMat); this.sky.renderOrder = -10; s.add(this.sky);
 
@@ -264,7 +294,7 @@ export class World {
     this.stars = new Particles(1600, { size: 3.4, sizeJitter: 1.2, colorA: '#ffffff', colorB: '#bcd4ff', twinkle: 0.7, seed: 99 });
     const r = rng(7);
     for (let i = 0; i < 1600; i++) { const a = r() * 6.283, b = Math.asin(0.04 + 0.96 * r()), d = 330; this.stars.setBase(i, Math.cos(a) * Math.cos(b) * d, Math.sin(b) * d, Math.sin(a) * Math.cos(b) * d); }
-    this.stars.material.fog = false; s.add(this.stars);
+    this.stars.material.fog = false; this.stars.renderOrder = -8; s.add(this.stars);
 
     // Mist: big soft puffs that drift through the scene and make everything dream-like.
     this.mist = [];
@@ -299,20 +329,35 @@ export class World {
   }
 
   _palNow() {
-    return { skyTop: this.skyMat.uniforms.uTop.value.clone(), skyHorizon: this.skyMat.uniforms.uHorizon.value.clone(), fog: this.scene.fog.color.clone(),
-      hemiSky: this.hemi.color.clone(), hemiGround: this.hemi.groundColor.clone(), key: this.key.color.clone(),
+    const b = this.palBase;   // the place's own colours, before a painting tinted them
+    return { skyTop: (b ? b.skyTop : this.skyMat.uniforms.uTop.value).clone(), skyHorizon: (b ? b.skyHorizon : this.skyMat.uniforms.uHorizon.value).clone(),
+      fog: (b ? b.fog : this.scene.fog.color).clone(),
+      hemiSky: (b ? b.hemiSky : this.hemi.color).clone(), hemiGround: (b ? b.hemiGround : this.hemi.groundColor).clone(), key: this.key.color.clone(),
       hemiI: this.hemi.intensity, keyI: this.key.intensity, stars: this.stars.material.uniforms.uOpacity.value,
       fogDensity: this.baseDensity ?? this.pal.fogDensity, mist: this.mistAmt ?? this.pal.mist, weather: this.palTo?.weather };
   }
 
   _blendPalette(dt) {
-    if (this.palT === undefined || this.palT >= 1) return;
+    if (this.palT === undefined) return;
+    const painted = this.paintK > 0.001 && this.painted;
+    if (this.palT >= 1 && !painted && !this.paintWas) return;
+    this.paintWas = painted;
     this.palT = Math.min(1, this.palT + dt / 4.5);
     const k = ease(this.palT), a = this.palFrom, b = this.palTo;
     this.skyMat.uniforms.uTop.value.copy(a.skyTop).lerp(b.skyTop, k);
     this.skyMat.uniforms.uHorizon.value.copy(a.skyHorizon).lerp(b.skyHorizon, k);
     this.scene.fog.color.copy(a.fog).lerp(b.fog, k);
     this.hemi.color.copy(a.hemiSky).lerp(b.hemiSky, k); this.hemi.groundColor.copy(a.hemiGround).lerp(b.hemiGround, k);
+    this.palBase = { skyTop: this.skyMat.uniforms.uTop.value.clone(), skyHorizon: this.skyMat.uniforms.uHorizon.value.clone(),
+      fog: this.scene.fog.color.clone(), hemiSky: this.hemi.color.clone(), hemiGround: this.hemi.groundColor.clone() };
+    if (painted) {
+      const p = this.paintK, c = this.painted;
+      this.skyMat.uniforms.uTop.value.lerp(c.sky, p * 0.85);
+      this.skyMat.uniforms.uHorizon.value.lerp(c.horizon, p * 0.85);
+      this.scene.fog.color.lerp(c.horizon, p * 0.6);
+      this.hemi.color.lerp(_tmpC.copy(c.sky).lerp(c.horizon, 0.5), p * 0.5);
+      this.hemi.groundColor.lerp(c.ground, p * 0.5);
+    }
     this.key.color.copy(a.key).lerp(b.key, k);
     this.hemi.intensity = a.hemiI + (b.hemiI - a.hemiI) * k; this.key.intensity = a.keyI + (b.keyI - a.keyI) * k;
     this.stars.material.uniforms.uOpacity.value = a.stars + (b.stars - a.stars) * k;
@@ -328,9 +373,11 @@ export class World {
     if (key !== this.settingKey) {
       const travelling = this.settingKind !== st.kind && !change.initial;
       if (this.setting) { this.setting.target = 0; this.oldSettings.push(this.setting); }
+      if (st.kind !== this.settingKind) for (const p of this.surrounds) p.target = 0;
       this.settingKind = st.kind; this.settingKey = key;
       const built = buildSetting(st.kind, st.time, 'dream');
-      pointify(built.group, { density: 80, min: 40, max: 36000, maxSize: 0.42, wander: 0.5 });
+      // long sweeping strokes for the land: a slow flow, mostly followed
+      pointify(built.group, { density: 80, min: 40, max: 36000, maxSize: 0.42, wander: 0.5, flow: 0.12, swirl: 2.0 });
       this.heightAt = built.heightAt;
       this.scene.add(built.group);
       this.setting = { ...built, fades: [collectFade(built.group)], fade: 0, target: 1, delay: travelling ? 1.6 : 0 };
@@ -450,7 +497,22 @@ export class World {
     }, done: () => { this.scene.remove(beam, halo); beam.geometry.dispose(); beam.material.dispose(); halo.material.dispose(); } });
   }
 
-  setBackdrop(url) {
+  // A painted place arrives: it stands round the dreamer in strokes, and the procedural
+  // landscape steps back. A painting of a place the dream has already left is dropped.
+  setBackdrop(url, relief = false, place = '') {
+    if (relief) {
+      if (place && place !== this.settingKind) return;
+      const img = new Image();
+      img.onload = () => {
+        if (place && place !== this.settingKind) return;
+        const made = paintedSurround(img); if (!made) return;
+        this.scene.add(made.pts);
+        for (const p of this.surrounds) p.target = 0;
+        this.surrounds.push({ pts: made.pts, u: made.pts.material.userData.dreamPoints, fade: 0, target: 1, colors: made });
+      };
+      img.src = url;
+      return;
+    }
     new THREE.TextureLoader().load(url, (tex) => {
       const img = tex.image, c = document.createElement('canvas'); c.width = 512; c.height = 512;
       const g = c.getContext('2d'); g.filter = 'blur(6px)'; g.drawImage(img, 0, 0, 512, 512); g.filter = 'none';
@@ -467,21 +529,31 @@ export class World {
 
   // A generated picture of a thing arrives: it becomes the thing's particle cloud, and
   // the geometric shape fades back into a faint aura.
-  setSprite(id, url) {
+  setSprite(id, url, relief = false) {
     const ent = id === 'self' ? this.self : this.entities.get(id);
     if (!ent || !ent.b.members.length) return;
     const img = new Image();
     img.onload = () => {
       if (ent !== (id === 'self' ? this.self : this.entities.get(id))) return;   // replaced meanwhile
+      for (const p of ent.pictures) { p.holder.removeFromParent(); disposeDeep(p.holder); }   // an older painting
+      ent.pictures = [];
       const box = new THREE.Box3(), size = new THREE.Vector3(), center = new THREE.Vector3();
+      let first = null;
       for (const m of ent.b.members) {
         box.setFromObject(m); box.getSize(size); box.getCenter(center); m.worldToLocal(center);
-        const S = THREE.MathUtils.clamp(Math.max(size.x, size.y, size.z) * 1.3, 0.8, 14);
-        const pts = imageCloud(img, S); if (!pts) continue;
+        // the picture hangs inside the member, so it is sized in the member's own scale
+        const own = m.getWorldScale(_ws).x || 1;
+        const S = relief ? THREE.MathUtils.clamp(Math.max(size.x, size.y, size.z) * 1.5, 1, 16) / own
+          : THREE.MathUtils.clamp(Math.max(size.x, size.y, size.z) * 1.3, 0.8, 14) / own;
+        let pts;
+        if (!relief) pts = imageCloud(img, S);
+        else if (first && Math.abs(first.userData.S - S) < 1e-3) pts = reliefTwin(first);
+        else { pts = reliefCloud(img, S); if (pts) { pts.userData.S = S; first = first || pts; } }
+        if (!pts) continue;
         const holder = new THREE.Group(); holder.position.copy(center); holder.add(pts); m.add(holder);
-        ent.pictures.push({ holder, u: pts.material.userData.dreamPoints });
+        ent.pictures.push({ holder, u: pts.material.userData.dreamPoints, relief });
       }
-      ent.pictureFade = 0.0001;
+      ent.pictureFade = 0.0001; ent.pictureRelief = relief;
     };
     img.src = url;
   }
@@ -504,11 +576,25 @@ export class World {
     this.scene.fog.density = (this.baseDensity ?? this.pal.fogDensity) * (0.65 + 0.55 * haze) * this.dream.fogBoost;
     dreamU.uFogDensity.value = this.scene.fog.density;
 
+    // painted places
+    let pk = 0;
+    this.surrounds = this.surrounds.filter((p) => {
+      p.fade += Math.sign(p.target - p.fade) * Math.min(Math.abs(p.target - p.fade), dt / (p.target > p.fade ? 5 : 2.5));
+      const e = ease(Math.max(0, p.fade));
+      p.u.uForm.value = e; p.u.uOpacity.value = Math.min(1, e * 1.3);
+      p.u.uWander.value = 0.22 * (0.7 + 0.8 * haze);
+      if (p.target > 0 && e >= pk) { pk = e; this.painted = p.colors; }
+      if (p.target === 0 && p.fade <= 0) { this.scene.remove(p.pts); p.pts.geometry.dispose(); p.pts.material.dispose(); return false; }
+      return true;
+    });
+    this.paintK = pk;
+
     // settings
     if (this.setting) {
       const s = this.setting;
       if (s.delay > 0) s.delay -= dt; else s.fade = Math.min(1, s.fade + dt / 3.5);
       for (const f of s.fades) applyFade(f, ease(s.fade));
+      if (pk > 0) for (const f of s.fades) for (const m of f.points) m.userData.dreamPoints.uOpacity.value *= 1 - 0.6 * pk;
       if (s.update) s.update(t, dt);
     }
     this.oldSettings = this.oldSettings.filter((s) => {

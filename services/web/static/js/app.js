@@ -61,8 +61,8 @@ net.on('status', (m) => { ui.setStatus(m.services); ui.waking(m.services); })
   .on('reply', (m) => { ui.clearWaiting(); ui.dreamer(m.text); if ($('lang').value === 'auto' && m.lang) ui.setLang(m.lang); })
   .on('audio', (m) => sound.play(m.url))
   .on('speak', (m) => sound.speakFallback(m.text, m.lang, m.voice))
-  .on('backdrop', (m) => world.setBackdrop(m.url))
-  .on('sprite', (m) => world.setSprite(m.id, m.url))
+  .on('backdrop', (m) => world.setBackdrop(m.url, m.relief, m.place))
+  .on('sprite', (m) => world.setSprite(m.id, m.url, m.relief))
   .on('notice', (m) => { ui.notice(m.key, m.detail); if (m.key === 'stumbled') ui.clearWaiting(); if (m.detail) console.warn('dreamscape:', m.key, m.detail); })
   .on('timings', (m) => ui.timings(m));
 

@@ -3,7 +3,8 @@
 #   director  - the game master: story memory + structured scene updates (talks to ollama)
 #   ollama    - runs the local language model on the GPU
 #   voice     - speech-to-text (Whisper, Hebrew-tuned) and text-to-speech (BlueTTS)
-#   imagery   - optional: dreamy backdrops on a GPU (here or on a second machine via Dask)
+#   imagery   - paints the dream's things and places (on this processor, or on a second
+#               machine's GPU that joins through Dask)
 name: dreamscape
 
 x-gpu: &gpu
@@ -29,7 +30,7 @@ services:
     environment:
       DIRECTOR_URL: http://director:9010
       VOICE_URL: http://voice:9020
-      IMAGERY_URL: ${IMAGERY_URL:-}
+      IMAGERY_URL: ${IMAGERY_URL-http://imagery:9030}
       HEARTBEAT_S: "3"
     depends_on: [director, voice]
     restart: unless-stopped
@@ -93,19 +94,30 @@ services:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9020/healthz', timeout=3)"]
     <<: *gpu
 
-  # Off by default. Enable with COMPOSE_PROFILES=imagery and IMAGERY_URL=http://imagery:9030 in .env
+  # Paints on this laptop's processor (about 6 GB of memory and a 3 GB download on the first
+  # start; the graphics card stays with the storyteller and the voices). A GPU machine running
+  # worker/docker-compose.yml takes the painting over when it joins (set DASK_BIND=0.0.0.0).
   imagery:
-    build: ./services/imagery
-    profiles: ["imagery"]
+    build:
+      context: ./services/imagery
+      args:
+        TORCH: ${IMAGERY_TORCH:-cpu}       # cu126 to paint on this machine's graphics card
     ports:
-      - "8786:8786"   # Dask scheduler: the GPU worker on the second machine connects here
-      - "8787:8787"   # Dask dashboard
+      - "${DASK_BIND:-127.0.0.1}:8786:8786"   # Dask scheduler: where a GPU worker joins
+      - "${DASK_BIND:-127.0.0.1}:8787:8787"   # Dask dashboard
     environment:
-      IMAGERY_LOCAL: ${IMAGERY_LOCAL:-0}
+      IMAGERY_LOCAL: ${IMAGERY_LOCAL:-1}
+      IMAGERY_DEVICE: ${IMAGERY_DEVICE:-cpu}
+      IMAGERY_THREADS: ${IMAGERY_THREADS:-0}
       IMAGERY_MODEL: ${IMAGERY_MODEL:-stabilityai/sd-turbo}
     volumes:
       - models:/models
+    mem_limit: ${IMAGERY_MEM:-9g}
     restart: unless-stopped
+    healthcheck:
+      <<: *health
+      start_period: 600s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9030/healthz', timeout=3)"]
     <<: *gpu
 
 volumes:

@@ -169,6 +169,17 @@ def _gpu_query(fields: tuple[str, ...]) -> list[str]:
     return [v.strip() for v in out.stdout.strip().splitlines()[0].split(",")]
 
 
+def _memory() -> dict:
+    """The shared VM's memory in MB (what every container draws on together)."""
+    try:
+        with open("/proc/meminfo") as f:
+            info = {k: int(v.split()[0]) for k, v in (line.split(":", 1) for line in f)}
+        return {"ram_total_mb": info["MemTotal"] // 1024, "ram_free_mb": info["MemAvailable"] // 1024,
+                "swap_used_mb": (info.get("SwapTotal", 0) - info.get("SwapFree", 0)) // 1024}
+    except (OSError, KeyError, ValueError):
+        return {}
+
+
 @app.get("/debug/gpu")
 async def debug_gpu():
     """What the graphics card is doing right now: memory, load, clock and heat. Memory is
@@ -185,6 +196,7 @@ async def debug_gpu():
         gpu["load_1m"] = round(os.getloadavg()[0], 2)
     except (AttributeError, OSError):
         pass
+    gpu.update(_memory())
     try:   # why the clock is held back, if it is (newer drivers renamed the field)
         gpu["clock_limits"] = (await asyncio.to_thread(_gpu_query, ("clocks_event_reasons.active",)))[0]
     except Exception:  # noqa: BLE001

@@ -125,6 +125,28 @@ pictures: dict[tuple[str, str], str] = {}
 # Things that already look right as procedural particles (groves, swarms, skies).
 SPRITE_SKIP = {"fireflies", "tree", "flower", "mushroom", "rock", "cloud", "star", "rainbow", "water", "fire"}
 
+# The place as the painter is asked for it, when the storyteller gave no picture of its own.
+PLACE_WORDS = {
+    "void": "", "forest": "a deep old forest", "meadow": "a wide meadow full of flowers",
+    "desert": "rolling desert dunes", "ocean": "the open ocean, waves to the horizon",
+    "mountains": "high mountains and valleys", "cave": "a vast glowing cave", "city": "a quiet city",
+    "space": "outer space, nebulae and stars", "moon": "the grey surface of the moon, black starry sky",
+    "clouds": "above a sea of clouds", "snow": "a snowy land", "underwater": "deep under the sea, rays of light",
+}
+TIME_WORDS = {"night": "at night", "dawn": "at dawn", "day": "in daylight", "dusk": "at dusk"}
+WEATHER_WORDS = {"mist": "misty", "rain": "rain falling", "snow": "snow falling", "storm": "a storm"}
+
+
+def place_prompt(setting: dict, backdrop: str = "") -> str:
+    """What the painter is asked to paint around the dreamer ("" for the black void)."""
+    if backdrop.strip():
+        return backdrop.strip()
+    words = PLACE_WORDS.get(setting.get("kind") or "void", setting.get("kind") or "")
+    if not words:
+        return ""
+    more = [TIME_WORDS.get(setting.get("time") or ""), WEATHER_WORDS.get(setting.get("weather") or "")]
+    return ", ".join([words] + [m for m in more if m])
+
 
 def describe(label: str | None, kind: str, color: str | None) -> str:
     text = (label or kind).strip()
@@ -220,6 +242,7 @@ class Dreamer:
         self.busy = False
         self.audio_meta: dict | None = None
         self.self_key = ""
+        self.place_key = ""
         self.pending: dict | None = None    # the player's last words, waiting for a service to wake up
         self.next_up = False                # ...or for the dreamer to finish its answer
         self.clip_log: list[tuple] = []     # (seconds since speak() began, synthesis seconds)
@@ -513,20 +536,48 @@ class Dreamer:
         return first
 
     def request_pictures(self, scene: dict, added: list, backdrop: str = "", everything: bool = False):
-        """With the imagery service up, every new thing (and the dreamer's new form) gets a
-        generated picture that the page turns into its particle cloud."""
+        """With the imagery service up, every new thing, the dreamer's new form and every new
+        place get painted; the page turns each painting into brush strokes in space."""
         if not (IMAGERY_URL and monitor.ok("imagery")):
             return
-        if backdrop:
-            asyncio.create_task(self.imagine(backdrop, "backdrop"))
         for t in scene.get("things", []):
             if (everything or t["id"] in added) and t.get("count", 1) <= 3 and t["kind"] not in SPRITE_SKIP:
-                asyncio.create_task(self.imagine(describe(t.get("label"), t["kind"], t.get("color")), "sprite", t["id"]))
+                asyncio.create_task(self.paint(describe(t.get("label"), t["kind"], t.get("color")), "thing",
+                                               t["id"], 0 if t["id"] in added else 1))
         me = scene.get("self") or {}
         key = f"{me.get('form')}|{me.get('label')}|{me.get('color')}"
         if me.get("form") not in (None, "wisp") and (everything or key != self.self_key):
-            asyncio.create_task(self.imagine(describe(me.get("label"), me["form"], me.get("color")), "sprite", "self"))
+            asyncio.create_task(self.paint(describe(me.get("label"), me["form"], me.get("color")), "thing", "self", 1))
         self.self_key = key
+        setting = scene.get("setting") or {}
+        place = f"{setting.get('kind')}|{setting.get('time')}|{setting.get('weather')}"
+        if everything or backdrop.strip() or place != self.place_key:
+            prompt = place_prompt(setting, backdrop)
+            if prompt:
+                asyncio.create_task(self.paint(prompt, "scene", "", 2, setting.get("kind") or ""))
+        self.place_key = place
+
+    async def paint(self, prompt: str, kind: str, thing_id: str = "", priority: int = 1, place: str = ""):
+        """One painting from the imagery service, sent to the page as a picture to paint
+        with (an older imagery service without /paint sends a plain picture instead)."""
+        msg = {"type": "sprite" if kind == "thing" else "backdrop", "id": thing_id, "prompt": prompt,
+               "relief": True, "place": place}
+        cached = pictures.get((kind, prompt))
+        if cached and media.get(cached.rsplit("/", 1)[-1]):
+            await self.send({**msg, "url": cached})
+            return
+        try:
+            r = await http.post(f"{IMAGERY_URL}/paint", timeout=240,
+                                json={"prompt": prompt, "kind": kind, "priority": priority})
+            if r.status_code == 404:
+                await self.imagine(prompt, "sprite" if kind == "thing" else "backdrop", thing_id)
+                return
+            r.raise_for_status()
+            url = media.put(r.content, "image/png", "png")
+            pictures[(kind, prompt)] = url
+            await self.send({**msg, "url": url})
+        except Exception as e:  # noqa: BLE001
+            log.info("painting skipped: %s", e)
 
     async def imagine(self, prompt: str, kind: str, thing_id: str = ""):
         cached = pictures.get((kind, prompt))
@@ -638,6 +689,18 @@ async def debug_gpu():
     """Graphics card memory, load, clock and heat, as the voice service sees them."""
     try:
         r = await http.get(f"{VOICE_URL}/debug/gpu", timeout=10)
+        return JSONResponse(r.json(), status_code=r.status_code)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
+
+
+@app.get("/api/debug/imagery")
+async def debug_imagery():
+    """The painter's state: where it paints, how many it made and how long each stage took."""
+    if not IMAGERY_URL:
+        return JSONResponse({"error": "the imagery service is off"}, status_code=404)
+    try:
+        r = await http.get(f"{IMAGERY_URL}/healthz", timeout=5)
         return JSONResponse(r.json(), status_code=r.status_code)
     except Exception as e:  # noqa: BLE001
         return JSONResponse({"error": f"{type(e).__name__}: {e}"}, status_code=502)
