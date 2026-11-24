@@ -468,7 +468,8 @@ export function reliefCloud(img, size, opts = {}) {
     A.aSize[k] = s.size; A.aSeed[k] = rnd();
     A.aFade[k] = 1 - Math.pow(s.mask, 0.8);
   });
-  const pts = new THREE.Points(geo, paintMaterial(size / P.W, 0.5, { selfLit: opts.selfLit ?? 0.8 }));
+  // (a painted thing stays fairly sharp out of focus, so it reads as itself)
+  const pts = new THREE.Points(geo, paintMaterial(size / P.W, 0.5, { selfLit: opts.selfLit ?? 0.8, dof: 0.55 }));
   pts.frustumCulled = false; pts.renderOrder = 3; pts.userData.relief = true;
   return pts;
 }

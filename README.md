@@ -19,7 +19,7 @@ flowchart LR
 1. You hold the glowing orb (or the space bar) and speak. The browser sends the recording to **web**.
 2. **voice** transcribes it with ivrit.ai's Hebrew-tuned Whisper.
 3. **director** asks the language model for one JSON answer that holds both the dreamer's spoken reply and the scene changes (new setting, things that appear, effects). Ollama's structured outputs guarantee valid JSON, and the director keeps the story's facts and the scene between turns. The model writes the reply early in its answer, and the director streams its first sentence out the moment that sentence is complete. If those first words come out in the wrong language, the director asks again before you hear anything.
-4. **voice** starts speaking that first sentence with BlueTTS (a long one is cut at its first comma) while the model is still writing the rest, so the dreamer starts talking about 2 to 3 seconds after you press Enter, or 2.5 to 4 seconds after you stop speaking.
+4. **voice** starts speaking that first sentence with BlueTTS (a long one is cut at its first comma) while the model is still writing the rest, so the dreamer starts talking about 1.5 seconds after you press Enter, or 2 to 3 seconds after you stop speaking.
 5. The scene update follows a second or two later and materialises while the dreamer talks; its light pulses with its voice.
 
 ### How the dream is drawn
@@ -83,11 +83,11 @@ docker compose down                     # stop (models and dreams stay in volume
 |---|---|---|
 | Gemma 4 E4B (Q4) with a 4K context | GPU | 4.7 GB |
 | Whisper large-v3-turbo, ivrit.ai, int8 | GPU | 1.5 GB |
-| BlueTTS | CPU, or GPU with `TTS_DEVICE=cuda` | none, or up to `TTS_GPU_MB` |
+| BlueTTS | GPU (`TTS_DEVICE=cpu` moves it to the processor) | about 0.13 GB |
 | The 3D dream in the browser | GPU | 0.3 GB |
-| Background pictures | second machine | none |
+| The painter (SD-Turbo, depth, matting) | processor, or a second machine's GPU | none (about 6 GB of memory) |
 
-Measured together on the RTX 4070 Laptop: 7.6 of 8.2 GB in use, so there is room for the game but not for another big GPU program next to it. `LLM_MODEL=gemma3:4b` in `.env` frees a gigabyte (6.6 GB in use) at the cost of plainer Hebrew and slower answers. If you already run Ollama on Windows, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env` and the container uses it.
+Measured together on the RTX 4070 Laptop: 7.7 of 8.2 GB in use, so there is room for the game but not for another big GPU program next to it. `LLM_MODEL=gemma3:4b` in `.env` frees a gigabyte (6.6 GB in use) at the cost of plainer Hebrew and slower answers. If you already run Ollama on Windows, set `OLLAMA_URL=http://host.docker.internal:11434` in `.env` and the container uses it.
 
 The dream page shares the graphics card with the storyteller, so while an answer is being written it draws 30 frames a second, and it keeps a full 60 the rest of the time.
 
@@ -102,7 +102,7 @@ The dream page shares the graphics card with the storyteller, so while an answer
 | `VOICE_NEUTRAL` | `noa,ariel` | The dreamer's voice before it has a gender (two voices averaged) |
 | `VOICE_FEMALE` / `VOICE_MALE` | `maya` / `daniel` | Voices once the story gives the dreamer a gender |
 | `TTS_SPEED` | `0.95` | Speaking pace |
-| `TTS_DEVICE` | `cpu` | `cuda` runs the voice on the GPU (it falls back to the CPU by itself if the GPU runtime cannot start). `POST /api/debug/voice/device` with `{"device": "cuda"}` or `"cpu"` switches a running game, to compare |
+| `TTS_DEVICE` | `cuda` | The voice on the GPU: a Hebrew line in about 0.3 s against 1.3 s on the processor, so the dreamer starts talking about a second sooner. It falls back to the CPU by itself if the GPU runtime cannot start; `cpu` keeps it there. `POST /api/debug/voice/device` with `{"device": "cuda"}` or `"cpu"` switches a running game, to compare |
 | `TTS_GPU_MB` | `900` | Video memory the GPU voice may use |
 | `LLM_NUM_THREAD` | `0` | Processor threads for the parts of the model that run on the CPU (0: Ollama decides) |
 | `IMAGERY_DEVICE` | `cpu` | Where the paintings are made on this machine: `cpu` keeps the graphics card for the storyteller and the voices (a thing takes a few seconds, a place a little longer); `cuda` for a card with 3 GB to spare, together with `IMAGERY_TORCH=cu126` (a 5 GB larger image) |

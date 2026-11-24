@@ -594,7 +594,10 @@ export class World {
       const s = this.setting;
       if (s.delay > 0) s.delay -= dt; else s.fade = Math.min(1, s.fade + dt / 3.5);
       for (const f of s.fades) applyFade(f, ease(s.fade));
-      if (pk > 0) for (const f of s.fades) for (const m of f.points) m.userData.dreamPoints.uOpacity.value *= 1 - 0.6 * pk;
+      if (pk > 0) for (const f of s.fades) {
+        for (const m of f.points) m.userData.dreamPoints.uOpacity.value *= 1 - 0.92 * pk;
+        for (const m of f.opac) m.opacity *= 1 - 0.85 * pk;      // its water, shafts and haze too
+      }
       if (s.update) s.update(t, dt);
     }
     this.oldSettings = this.oldSettings.filter((s) => {
@@ -614,7 +617,8 @@ export class World {
     const voidish = this.settingKind === 'void';
     const fogC = this.scene.fog.color, mistColor = fogC.clone().lerp(new THREE.Color('#ffffff'), voidish ? 0.1 : 0.14);
     const fogLum = 0.2126 * fogC.r + 0.7152 * fogC.g + 0.0722 * fogC.b;
-    const mistA = (this.mistAmt ?? this.pal.mist) * (0.25 + 0.6 * haze) * (this.thinking ? 1.25 : 1) * (voidish ? 0.6 : 1) * (1 - 0.6 * Math.min(1, fogLum * 1.6));
+    const mistA = (this.mistAmt ?? this.pal.mist) * (0.25 + 0.6 * haze) * (this.thinking ? 1.25 : 1) * (voidish ? 0.6 : 1) * (1 - 0.6 * Math.min(1, fogLum * 1.6))
+      * (1 - 0.6 * this.paintK);   // a painted place has its own air
     for (const m of this.mist) {
       const u = m.userData;
       m.position.x += u.vx * dt * (this.thinking ? 2.5 : 1); m.position.z += u.vz * dt;

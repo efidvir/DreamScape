@@ -25,11 +25,11 @@ from . import relief, render
 
 log = logging.getLogger("imagery.paint")
 
-VERSION = 1      # bump when the look of the paintings changes, so old ones are not reused
+VERSION = 2      # bump when the look of the paintings changes, so old ones are not reused
 
 STYLE = {
-    "thing": ("{p}, alone in the middle of the picture, whole and in full view, painterly oil "
-              "painting, soft visible brush strokes, dreamlike glow, plain dark background"),
+    "thing": ("{p}, full body, the whole of it in view, alone in the middle of the picture, "
+              "painterly oil painting, soft visible brush strokes, dreamlike glow, plain dark background"),
     "scene": ("{p}, wide panoramic view, impressionist oil painting, soft visible brush strokes, "
               "luminous dreamlike colours, deep atmospheric distance"),
 }
