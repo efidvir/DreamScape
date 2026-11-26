@@ -66,6 +66,7 @@ def turn_schema(pictures: bool = True) -> dict:
                 },
                 "required": ["kind", "time", "weather"],
             },
+            "keep": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
             "add": {"type": "array", "items": thing, "maxItems": 4},
             "change": {"type": "array", "items": change, "maxItems": 4},
             "remove": {"type": "array", "items": {"type": "string"}, "maxItems": 6},
@@ -75,11 +76,27 @@ def turn_schema(pictures: bool = True) -> dict:
             "ending": {"type": "boolean"},
     }
     # Facts and voice, then the spoken reply, then the scene (see prompt.ORDER).
-    order = ["facts", "voice", "reply", "self", "setting", "add", "change", "remove", "effect",
-             "clarity", "backdrop", "ending"]
+    order = ["facts", "voice", "reply", "self", "setting", "keep", "add", "change", "remove",
+             "effect", "clarity", "backdrop", "ending"]
     if not pictures:
         order.remove("backdrop")
     return {"type": "object", "properties": {k: props[k] for k in order}, "required": order}
+
+
+def direction_schema() -> dict:
+    """What the dream's quiet director writes between turns (see prompt.direction_message)."""
+    beat = {"type": "object",
+            "properties": {"who": {"type": "string"}, "does": _enum(vocab.ACTIONS), "to": {"type": "string"}},
+            "required": ["who", "does", "to"]}
+    want = {"type": "object", "properties": {"id": {"type": "string"}, "want": {"type": "string"}},
+            "required": ["id", "want"]}
+    return {"type": "object",
+            "properties": {"quest": {"type": "string"}, "shown": {"type": "string"},
+                           "progress": {"type": "integer", "minimum": 0, "maximum": vocab.QUEST_STEPS},
+                           "wants": {"type": "array", "items": want, "maxItems": 3},
+                           "next": {"type": "array", "items": beat, "minItems": 1, "maxItems": 4},
+                           "hint": {"type": "string"}},
+            "required": ["quest", "shown", "progress", "wants", "next", "hint"]}
 
 
 # --------------------------------------------------------------------------- parsing
@@ -116,6 +133,7 @@ class TurnOutput:
     setting_kind: str = "same"
     setting_time: str = "same"
     setting_weather: str = "same"
+    keep: list[str] = field(default_factory=list)
     add: list[ThingSpec] = field(default_factory=list)
     change: list[ChangeSpec] = field(default_factory=list)
     remove: list[str] = field(default_factory=list)
@@ -161,6 +179,9 @@ def parse_turn(raw: dict) -> TurnOutput:
     out.setting_time = _pick(st.get("time"), vocab.TIMES + ["same"], "same")
     out.setting_weather = _pick(st.get("weather"), vocab.WEATHER + ["same"], "same")
 
+    keep = raw.get("keep") if isinstance(raw.get("keep"), list) else []
+    out.keep = [k for k in (clean_id(x) for x in keep) if k][:8]
+
     for item in (raw.get("add") if isinstance(raw.get("add"), list) else [])[:4]:
         if not isinstance(item, dict):
             continue
@@ -204,3 +225,44 @@ def parse_turn(raw: dict) -> TurnOutput:
     out.backdrop = _str(raw.get("backdrop"), 200)
     out.ending = bool(raw.get("ending")) if isinstance(raw.get("ending"), bool) else False
     return out
+
+
+@dataclass
+class Direction:
+    quest: str = "same"
+    shown: str = ""
+    progress: int | None = None
+    wants: dict[str, str] = field(default_factory=dict)
+    next: list[dict] = field(default_factory=list)
+    hint: str = ""
+
+
+def parse_direction(raw: dict, ids: set[str]) -> Direction:
+    """The director's answer, kept to the beings and things that are really there."""
+    if not isinstance(raw, dict):
+        raw = {}
+    d = Direction()
+    q = _str(raw.get("quest"), 120)
+    d.quest = "same" if q.lower() in ("same", "") and raw.get("quest") != "" else q
+    d.shown = _str(raw.get("shown"), 80)
+    try:
+        d.progress = max(0, min(vocab.QUEST_STEPS, int(raw.get("progress"))))
+    except (TypeError, ValueError):
+        d.progress = None
+    for w in (raw.get("wants") if isinstance(raw.get("wants"), list) else [])[:3]:
+        if isinstance(w, dict) and (tid := clean_id(w.get("id"))) in ids and _str(w.get("want"), 100):
+            d.wants[tid] = _str(w.get("want"), 100)
+    seen = 0
+    for b in (raw.get("next") if isinstance(raw.get("next"), list) else [])[:4]:
+        if not isinstance(b, dict):
+            continue
+        who, to = clean_id(b.get("who")), clean_id(b.get("to"))
+        does = _pick(b.get("does"), vocab.ACTIONS, "")
+        if not does or who not in ids | {"self"}:
+            continue
+        if to not in ids | {"self"} or to == who:
+            to = ""
+        d.next.append({"who": who, "does": does, "to": to})
+        seen += 1
+    d.hint = _str(raw.get("hint"), 160)
+    return d

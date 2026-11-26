@@ -9,6 +9,8 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { snoise } from './kit.js';
 import { dreamU } from './points.js';
 
+const _shot = new THREE.Vector3();
+
 const DreamShader = {
   uniforms: {
     tDiffuse: { value: null }, uTime: { value: 0 }, uHaze: { value: 0.8 }, uFlash: { value: 0 },
@@ -73,6 +75,8 @@ export class DreamRenderer {
 
     this.home = new THREE.Vector3(0, 1.25, 0);
     this.attention = this.home.clone(); this.look = this.home.clone();
+    this.lookNow = this.home.clone(); this.shot = null; this.shotFrom = null;
+    this.storytellerBusy = false;   // the storyteller is writing an answer for any page
     this.attendUntil = 0;
     this.fx = { pulse: 0, flash: 0, ripple: 0, warp: 0, darken: 0, bloom: 0 };
     this.flashColor = new THREE.Color('#ffffff');
@@ -111,6 +115,36 @@ export class DreamRenderer {
     if (!animate) this.look.copy(this.home).lerp(pos, 0.35);
     this.attendUntil = this.elapsed + 8;
   }
+
+  // Between turns the camera goes to look at what happens: it glides to a new place that
+  // frames the points (and now and then a wide view), stays a while drifting, and comes back
+  // to the dreamer when the player speaks. It stays in front of the stage, inside the painted
+  // place, and never inside anything.
+  frame(points, { wide = false } = {}) {
+    if (!points.length) return;
+    const c = new THREE.Vector3();
+    for (const p of points) c.add(p);
+    c.multiplyScalar(1 / points.length);
+    let spread = 0;
+    for (const p of points) spread = Math.max(spread, p.distanceTo(c));
+    const d = THREE.MathUtils.clamp(4 + spread * 1.9 + (wide ? 5 : 0), 4.4, 15);
+    this.side = -(this.side || 1);
+    const az = THREE.MathUtils.clamp(c.x * 0.03 + this.side * (0.22 + Math.random() * 0.4), -0.9, 0.9);
+    const el = wide ? 0.3 + Math.random() * 0.12 : 0.06 + Math.random() * 0.12;
+    const pos = new THREE.Vector3(c.x + Math.sin(az) * d * Math.cos(el), c.y + 0.3 + Math.sin(el) * d,
+      c.z + Math.cos(az) * d * Math.cos(el));
+    pos.x = THREE.MathUtils.clamp(pos.x, -8, 8);
+    pos.y = THREE.MathUtils.clamp(pos.y, 0.9, 6.5);
+    pos.z = THREE.MathUtils.clamp(pos.z, -2, 12.5);
+    this.shotFrom = { pos: this.camera.position.clone(), look: this.lookNow.clone() };
+    this.shot = { pos, look: c, t0: this.elapsed, dur: 7 + Math.random() * 3, drift: (Math.random() - 0.5) * 1.2 };
+  }
+
+  comeBack() {
+    if (!this.shot || this.shot.home) return;
+    this.shotFrom = { pos: this.camera.position.clone(), look: this.lookNow.clone() };
+    this.shot = { home: true, t0: this.elapsed, dur: 3.5 };
+  }
   pulseClarity() { this.fx.pulse = 1; }
   flash(c, amount = 0.8) { this.flashColor.copy(c); this.fx.flash = Math.max(this.fx.flash, amount); }
   ripple() { this.fx.ripple = 1; }
@@ -122,8 +156,12 @@ export class DreamRenderer {
   start(onFrame) {
     let last = 0;
     this.renderer.setAnimationLoop((now) => {
-      // While the storyteller writes its answer, half the frames are enough: the GPU is its.
-      const gap = this.world && this.world.thinking ? 1000 / 30 - 2 : 0;
+      // A slow dream needs no more than 60 frames a second, even on a 144 Hz laptop screen.
+      // While the storyteller writes an answer (to this page or to another one open on the
+      // same machine), or the page waits behind another window, 30 are enough: the graphics
+      // card is the storyteller's.
+      const easy = (this.world && this.world.thinking) || this.storytellerBusy || !document.hasFocus();
+      const gap = easy ? 1000 / 30 - 2 : 1000 / 60 - 2;
       if (now - last < gap) return;
       last = now;
       this.timer.update(now);
@@ -160,12 +198,28 @@ export class DreamRenderer {
     this.camera.position.set(Math.sin(sway) * dist, 1.65 + Math.sin(t * 0.13) * 0.28 + snoise(t * 0.2, 2) * 0.05, Math.cos(sway) * dist);
     const goal = t < this.attendUntil ? this.home.clone().lerp(this.attention, 0.55) : this.home;
     this.look.lerp(goal, Math.min(1, dt * 0.8));
-    this.camera.lookAt(this.look);
+    this.lookNow.copy(this.look);
+    if (this.shot && this.shotFrom) {
+      const s = this.shot, p = Math.min(1, (t - s.t0) / s.dur), w = p * p * (3 - 2 * p);
+      if (s.home) {
+        this.camera.position.lerpVectors(this.shotFrom.pos, this.camera.position, w);
+        this.lookNow.lerpVectors(this.shotFrom.look, this.look, w);
+        if (p >= 1) this.shot = null;
+      } else {
+        const held = Math.max(0, t - s.t0 - s.dur);        // a slow drift while it watches
+        _shot.copy(s.pos);
+        _shot.x += Math.sin(held * 0.06) * s.drift;
+        _shot.y += Math.sin(t * 0.13) * 0.12 + snoise(t * 0.2, 3) * 0.04;
+        this.camera.position.lerpVectors(this.shotFrom.pos, _shot, w);
+        this.lookNow.lerpVectors(this.shotFrom.look, s.look, w);
+      }
+    }
+    this.camera.lookAt(this.lookNow);
     this.camera.fov = 55 + fx.warp * 14 * Math.sin(fx.warp * Math.PI);
     this.camera.updateProjectionMatrix();
 
     // Lens.
-    const focusPoint = t < this.attendUntil ? this.attention : this.home;
+    const focusPoint = this.shot && !this.shot.home ? this.shot.look : t < this.attendUntil ? this.attention : this.home;
     const focus = this.camera.position.distanceTo(focusPoint);
     dreamU.uFocus.value += (focus - dreamU.uFocus.value) * Math.min(1, dt * 2);
     dreamU.uAperture.value = 0.35 + 1.5 * this.haze;

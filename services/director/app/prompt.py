@@ -78,6 +78,7 @@ How you shape the dream that appears on screen:
 - voice: "female" or "male" once your gender is known, otherwise "same".
 - self: your own appearance. form is what you are now (from the thing kinds, or "wisp" for a nameless spark), or "same". label is a short English description, color is a color name, or "" to keep them.
 - setting: where you are now. kind, time and weather, each one or "same".
+- keep: when you go to a new place, the ids of the beings and things that come along with you: companions at your side, what you carry, whoever the player names. Everything else stays behind in the old place. Decide it yourself from the story; never ask the player.
 - add: up to 4 new things that appear, each with a short unique id, a kind, an English label, a color, size, count, where and motion.
 - change: things already in the dream (by id) that change color, size, place or motion. remove: ids of things that vanish.
 - effect: a flourish for big moments: sparkle (magic), warp (travelling somewhere), ascend (becoming powerful or divine), flash, ripple, darken, bloom, or "none".
@@ -89,7 +90,8 @@ Times: {_list(vocab.TIMES)}. Weather: {_list(vocab.WEATHER)}.
 Thing kinds: {things}.
 Sizes: {_list(vocab.SIZES)}. Where: {_list(vocab.WHERE)}. Motions: {_list(vocab.MOTIONS)}.
 
-Add only things the player mentions or that naturally fill the place: a forest needs trees, the sea needs water. For anything missing from the list use kind "other" with a clear English label. You yourself are shown through "self"; never add yourself as a thing."""
+Add only things the player mentions or that naturally fill the place: a forest needs trees, the sea needs water.
+When the dream state names your quest, steer gently toward it: notice signs of it, let the beings help or hinder, and greet every step the player makes toward it with delight. Beings act on what they want. For anything missing from the list use kind "other" with a clear English label. You yourself are shown through "self"; never add yourself as a thing."""
 
 
 # The player's words in one turn, at most (a monologue keeps its beginning).
@@ -135,7 +137,7 @@ def _recent(history: list[dict], max_items: int, limit: int = 240) -> str:
 
 
 _EMPTY = {"facts": [], "voice": "same", "self": {"form": "same", "label": "", "color": ""},
-          "setting": {"kind": "same", "time": "same", "weather": "same"},
+          "setting": {"kind": "same", "time": "same", "weather": "same"}, "keep": [],
           "add": [], "change": [], "remove": [], "effect": "none", "clarity": 0.15,
           "backdrop": "", "ending": False}
 
@@ -143,8 +145,8 @@ _EMPTY = {"facts": [], "voice": "same", "self": {"form": "same", "label": "", "c
 # The order the model writes its answer in (the schema follows it): first what the player
 # established and the dreamer's voice, then the spoken reply, which is streamed to the voice
 # as soon as it is complete, then the scene changes while the dreamer is already talking.
-ORDER = ("facts", "voice", "reply", "self", "setting", "add", "change", "remove", "effect",
-         "clarity", "backdrop", "ending")
+ORDER = ("facts", "voice", "reply", "self", "setting", "keep", "add", "change", "remove",
+         "effect", "clarity", "backdrop", "ending")
 
 
 def _ex(**kw) -> str:
@@ -274,4 +276,45 @@ def build_messages(summary: str, history: list[dict], text: str, lang: str,
     if strict_lang:
         last += STRICT_LANG.get(lang, STRICT_LANG["en"])
     msgs.append({"role": "user", "content": last})
+    return msgs
+
+
+# --------------------------------------------------------------------------- the director
+# Between the player's words a second, quiet call decides what happens next. Its craft comes
+# from interactive drama and tabletop game mastering: Façade's drama manager sequences small
+# "beats" along a rising and falling tension arc; Blades in the Dark tracks every objective
+# on a progress clock; good game masters give each character a want, let the world move on
+# its own when the players do nothing, and answer "yes, but" instead of "no"; Dramamancer
+# and Generative Agents let characters act on conditions and plans of their own.
+DIRECT = """[DIRECTOR]
+Now be the dream's quiet director. While the player is silent the dream goes on by itself: decide what happens next, slowly, over the coming minute. Your craft:
+- Arc: a dream grows from wonder, to a wish or a quest, a journey, a gentle trial, a gift, and a calm ending.
+- Quest: as soon as the story suggests something to find, reach, learn, make or help, name it as a short quest, and keep it until it is fulfilled. Progress runs from 0 to {steps}: raise it by 1 when the player's last words moved toward it, by 2 for a big step; never lower it.
+- Characters: each being wants something small that fits the story (to show a hidden path, to guard a secret, to play), and acts on it.
+- The world moves on its own: beings meet, follow, circle, play and rest; objects glow, grow, shrink, stretch, melt or spin. Nothing new appears and nothing leaves: only the player's words do that.
+- Yes, but: let small surprises open new questions, and never undo what the player established.
+- Keep it gentle, right for any age.
+Write:
+- quest: the quest in short English, "same" to keep it, "" while there is none yet.
+- shown: the quest in a few words of {language}, for the screen ("" while there is none).
+- progress: 0 to {steps}.
+- wants: up to 3 beings (by id) and what each wants, in short English.
+- next: 2 to 4 things that happen next, in order. who: an id from the dream state or "self"; does: one of {actions}; to: an id, "self", or "".
+- hint: one short English sentence of what is quietly happening now."""
+
+
+def direction_messages(summary: str, history: list[dict], lang: str, now: str = "",
+                       pictures: bool = True, max_history: int = 4) -> list[dict]:
+    """The director's call opens like a turn's (same system prompt and examples, so the
+    model's cached tokens are reused) and asks for the next quiet minute at the end."""
+    msgs = [{"role": "system", "content": system_prompt(pictures)}]
+    for user, assistant in examples(pictures, lang):
+        msgs.append({"role": "user", "content": user})
+        msgs.append({"role": "assistant", "content": assistant})
+    talk = _recent(history, max_history)
+    here = f"Right now: {now}\n\n" if now else ""
+    msgs.append({"role": "user", "content": (
+        f"[DREAM STATE]\n{summary}\n\n" + (f"[RECENT CONVERSATION]\n{talk}\n\n" if talk else "") + here
+        + DIRECT.format(steps=vocab.QUEST_STEPS, language=LANG_NAMES.get(lang, "English"),
+                        actions=", ".join(vocab.ACTIONS)))})
     return msgs

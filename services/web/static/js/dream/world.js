@@ -5,12 +5,17 @@ import * as THREE from 'three';
 import { BUILDERS, GROUND_KINDS, SKY_KINDS, wisp, guessKind } from './things.js';
 import { buildSetting, palette } from './settings.js';
 import { pointify, dreamU, imageCloud, reliefCloud, reliefTwin, paintedSurround } from './points.js';
+import { Life, MOVING } from './life.js';
 import { rng, color, collectFade, applyFade, disposeDeep, Particles, mistTex, softDot, snoise, glowSprite, sparkleTex, dreamClock } from './kit.js';
 
 const FADE_IN = 3.6, FADE_OUT = 2.6;
 const _tmpC = new THREE.Color();
 const ease = (x) => x * x * (3 - 2 * x);
 const _Y = new THREE.Vector3(0, 1, 0), _hp = new THREE.Vector3(), _yq = new THREE.Quaternion(), _ws = new THREE.Vector3();
+const _g = new THREE.Vector3(), _d = new THREE.Vector3();
+// Where things may wander by themselves: in front of the dreamer, inside the painted place.
+const STAGE = { x: 9, zMin: -14, zMax: 3.5, yMax: 7 };
+const SHAPES = { grow: [1.35, 1.35, 1.35], shrink: [0.7, 0.7, 0.7], stretch: [0.85, 1.45, 0.85], melt: [1.25, 0.6, 1.25] };
 
 function layout(where, kind, i, n, r, heightAt, size = 'medium') {
   const ground = GROUND_KINDS.has(kind);
@@ -96,7 +101,8 @@ class Entity {
       if (big > 0.01 && big < 1.2) m0.scale.multiplyScalar(1.2 / big);
       else if (big > 3.2) m0.scale.multiplyScalar(3.2 / big);      // a whale still fits the view
     }
-    this.b.members.forEach((m, k) => { m.userData.base = m.position.clone(); m.userData.phase = r() * 6.283 + k; m.userData.scale0 = m.scale.x; });
+    this.b.members.forEach((m, k) => { m.userData.base = m.position.clone(); m.userData.phase = r() * 6.283 + k; m.userData.scale0 = m.scale.x; m.userData.scaleV = m.scale.clone(); });
+    this.shape = shape;
     this.root = this.b.root;
     // Everything solid is redrawn as a soft particle cloud.
     // The dreamer is drawn a little denser than other things, but not so dense that it
@@ -123,6 +129,14 @@ class Entity {
     this.flickerSeed = r() * 100;
     this.anchor = this.b.members[0] ? this.b.members[0].userData.base.clone() : place(0);
     for (const f of this.fades) applyFade(f, 0);
+    // What it does by itself between turns (see act and life.js).
+    const box = this.b.members[0] ? new THREE.Box3().setFromObject(this.b.members[0]) : null;
+    const dims = box && !box.isEmpty() ? box.getSize(new THREE.Vector3()) : new THREE.Vector3(1, 1, 1);
+    this.radius = THREE.MathUtils.clamp(Math.max(dims.x, dims.z) / 2, 0.3, 4);
+    this.flies = !GROUND_KINDS.has(shape) && this.anchor.y > 0.4;
+    this.shift = new THREE.Vector3(); this.drive = null; this.settle = 0;
+    this.shapeNow = new THREE.Vector3(1, 1, 1); this.shapeGoal = new THREE.Vector3(1, 1, 1);
+    this.shapeUntil = 0; this.spinRate = 0; this.glow = 0; this.glowGoal = 0; this.wobble = 0; this.wobbleGoal = 0;
   }
 
   retint(c) {
@@ -133,6 +147,88 @@ class Entity {
   }
 
   get position() { return (this.b.members[0] || this.root).getWorldPosition(new THREE.Vector3()); }
+
+  // Something it does by itself for a while: go somewhere (to another, around it, after it,
+  // away, about, up, down, back home, or just turn to look), or change its shape or light.
+  act(does, target, t, dur = 24) {
+    if (MOVING.has(does)) {
+      this.drive = { does, target, t0: t, until: t + dur, a0: Math.random() * 6.283 };
+      if (does === 'wander') {
+        const a = Math.random() * 6.283, d = 2 + Math.random() * 3;
+        this.drive.spot = new THREE.Vector3(Math.cos(a) * d, 0, Math.sin(a) * d);
+      }
+      return;
+    }
+    this.shapeGoal.set(...(SHAPES[does] || [1, 1, 1]));
+    this.spinRate = does === 'spin' ? 1.1 : 0;
+    this.glowGoal = does === 'glow' ? 1 : does === 'dim' ? -0.6 : 0;
+    this.wobbleGoal = does === 'melt' ? 1 : 0;
+    this.shapeUntil = t + dur;
+  }
+
+  // Where its acting takes it, as an offset from its own place (null: nowhere new).
+  _goal(t) {
+    const dv = this.drive;
+    if (!dv) return null;
+    if (t > dv.until) { this.drive = null; return null; }
+    const home = this.anchor, now = _d.copy(home).add(this.shift);
+    const tp = dv.target && !dv.target.dying ? dv.target.position : null;
+    // flyers come down or up to whoever they go to, but not far from their own height
+    const keepY = (y) => (this.flies ? THREE.MathUtils.clamp(y + 0.4, home.y - 0.8, home.y + 1.2) : home.y);
+    switch (dv.does) {
+      case 'approach': case 'play': case 'follow': {
+        if (!tp) return null;
+        const dir = now.clone().sub(tp); dir.y = 0;
+        if (dir.lengthSq() < 1e-4) dir.set(1, 0, 0);
+        const gap = (dv.does === 'follow' ? 2.2 : 1.1) + this.radius + (dv.target.radius || 0.5);
+        _g.copy(tp).addScaledVector(dir.normalize(), gap); _g.y = keepY(tp.y);
+        break;
+      }
+      case 'circle': {
+        if (!tp) return null;
+        const a = dv.a0 + (t - dv.t0) * 0.3, R = 1.6 + this.radius + (dv.target.radius || 0.5);
+        _g.set(tp.x + Math.cos(a) * R, keepY(tp.y + 0.2), tp.z + Math.sin(a) * R);
+        break;
+      }
+      case 'flee': {
+        if (!tp) return null;
+        const dir = now.clone().sub(tp); dir.y = 0;
+        _g.copy(now).addScaledVector(dir.lengthSq() > 1e-4 ? dir.normalize() : _Y, 4);
+        break;
+      }
+      case 'wander': _g.copy(home).add(dv.spot); break;
+      case 'rest': _g.copy(now); _g.y = this.flies ? Math.max(0.8, home.y - 0.6) : home.y; break;
+      case 'rise': _g.copy(now); _g.y = home.y + 1.8; break;
+      case 'sink': _g.copy(now); _g.y = this.flies ? Math.max(0.6, home.y - 1) : home.y; break;
+      case 'return': return _g.set(0, 0, 0);
+      default: return null;                       // look: stays, turns to see
+    }
+    _g.x = THREE.MathUtils.clamp(_g.x, -STAGE.x, STAGE.x);
+    _g.z = THREE.MathUtils.clamp(_g.z, STAGE.zMin, STAGE.zMax);
+    _g.y = THREE.MathUtils.clamp(_g.y, 0, STAGE.yMax);
+    return _g.sub(home);
+  }
+
+  _live(t, dt) {
+    if (this.shapeUntil && t > this.shapeUntil) {        // a change lasts a while, then eases back
+      this.shapeGoal.set(1, 1, 1); this.spinRate = 0; this.glowGoal = 0; this.wobbleGoal = 0; this.shapeUntil = 0;
+    }
+    const k = 1 - Math.exp(-dt * 0.4);
+    this.shapeNow.lerp(this.shapeGoal, k);
+    this.glow += (this.glowGoal - this.glow) * k;
+    this.wobble += (this.wobbleGoal - this.wobble) * k;
+    const goal = this._goal(t);
+    const driving = !!this.drive;
+    this.settle = Math.min(1, Math.max(0, this.settle + (driving ? dt / 3 : -dt / 5)));
+    if (goal) {
+      // walk there at a walker's pace, faster when far
+      _d.copy(goal).sub(this.shift);
+      const len = _d.length();
+      if (len > 1e-3) this.shift.addScaledVector(_d, Math.min(len, dt * (0.5 + len * 0.18)) / len);
+    } else if (!driving && this.settle === 0 && this.shift.lengthSq() > 1e-4) {
+      this.shift.multiplyScalar(1 - Math.min(1, dt * 0.03));      // long after, it drifts home
+    }
+  }
 
   update(t, dt) {
     const speed = this.target > this.fade ? dt / FADE_IN : dt / FADE_OUT;
@@ -170,6 +266,14 @@ class Entity {
       for (const f of this.tintFrom) { f.u.uTint.value.copy(f.c).lerp(this.tintTo, k); f.u.uTintAmt.value = f.a + (0.75 - f.a) * k; }
       if (this.tintT >= 1) this.tintTo = null;
     }
+    this._live(t, dt);
+    if (Math.abs(this.glow) > 0.01 || this.wobble > 0.01) {
+      const lift = 1 + 0.4 * this.glow, shake = 1 + 2.5 * this.wobble;
+      for (const f of this.fades) for (const m of f.points) {
+        const u = m.userData.dreamPoints; u.uOpacity.value *= lift; u.uWander.value *= shake;
+      }
+      for (const p of this.pictures) { p.u.uOpacity.value = Math.min(1.25, p.u.uOpacity.value * lift); p.u.uWander.value *= shake; }
+    }
     this.move(t, dt, e);
     this.env.voice = this.isSelf ? this.world.voice : 0;
     this.env.thinking = this.world.thinking;
@@ -185,6 +289,9 @@ class Entity {
   move(t, dt, e) {
     const members = this.b.members; if (!members.length) return;
     this.env.moving = false;
+    const calm = this.settle * this.settle * (3 - 2 * this.settle);
+    const sv = this.shapeNow, glowPulse = 1 + 0.04 * Math.max(0, this.glow) * Math.sin(t * 2.4);
+    const target = this.drive && this.drive.target && !this.drive.target.dying ? this.drive.target : null;
     for (const m of members) {
       const b = m.userData.base, ph = m.userData.phase, prev = m.position.clone();
       const rise = (1 - e) * -0.35;             // things float up a little as they appear
@@ -215,8 +322,26 @@ class Entity {
           this.env.moving = true; break;
         }
         case 'spin': m.position.set(b.x, b.y + Math.sin(t * 0.8 + ph) * 0.1 + rise, b.z); m.rotation.y += dt * 0.9; break;
-        case 'pulse': m.position.set(b.x, b.y + rise, b.z); m.scale.setScalar(m.userData.scale0 * (1 + 0.07 * Math.sin(t * 2.2 + ph))); break;
+        case 'pulse': m.position.set(b.x, b.y + rise, b.z); break;
         default: m.position.set(b.x, b.y + Math.sin(t * 0.5 + ph) * 0.02 + rise, b.z);
+      }
+      // Acting: its usual round gives way to a calm stir where it went, and a play has hops.
+      if (calm > 0 && !this.isSelf) {
+        const hop = this.drive && this.drive.does === 'play' ? Math.abs(Math.sin(t * 3 + ph)) * 0.35 : 0;
+        _g.set(b.x + snoise(t * 0.2, ph) * 0.3, b.y + snoise(t * 0.25, ph + 4) * 0.15 + hop, b.z + snoise(t * 0.18, ph + 8) * 0.3);
+        m.position.lerp(_g, calm);
+      }
+      m.position.add(this.shift);
+      if (this.shapeNow.y < 0.98) m.position.y -= (1 - this.shapeNow.y) * this.radius * 0.6;   // melting sags
+      const pulse = this.motion === 'pulse' && !this.isSelf ? 1 + 0.07 * Math.sin(t * 2.2 + ph) : 1;
+      const sV = m.userData.scaleV, k = pulse * glowPulse;
+      m.scale.set(sV.x * sv.x * k, sV.y * sv.y * k, sV.z * sv.z * k);
+      if (this.spinRate) m.rotation.y += dt * this.spinRate;
+      if (calm > 0.3 && target && !this.isSelf) {                // turn to whoever it is with
+        const tp = target.position, yaw = Math.atan2(tp.x - m.position.x, tp.z - m.position.z);
+        let dy = yaw - m.rotation.y; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        m.rotation.y += dy * Math.min(1, dt * 1.5);
+        continue;
       }
       // Face the way we are going.
       if (['buzz', 'fly', 'swim', 'walk', 'orbit', 'drift'].includes(this.motion) && !this.isSelf) {
@@ -248,6 +373,7 @@ export class World {
     this.settingKind = 'void'; this.settingKey = '';
     this.setting = null; this.oldSettings = [];
     this.surrounds = []; this.painted = null; this.paintK = 0;   // painted places around the dreamer
+    this.life = new Life(this);
     this.heightAt = () => 0;
     this.effects = [];
     this.pal = palette('void', 'night', 'mist'); this.palTo = this.pal;
@@ -433,6 +559,7 @@ export class World {
     // attention: look at what just appeared
     const firstNew = (change.added || []).map((id) => this.entities.get(id)).find(Boolean);
     this.dream.attend(firstNew ? firstNew.anchor : new THREE.Vector3(0, 1.25, 0), !change.initial);
+    if (!change.initial) this.life.turn(this.dream.elapsed);     // news: the camera comes back to see it
     if (!change.initial) this.dream.pulseClarity();
     this.runEffect(change.effect, firstNew);
     if (scene.ended && !this.ended) { this.ended = true; this.runEffect('ascend'); }
@@ -564,6 +691,7 @@ export class World {
   // ---------------------------------------------------------------- frame
   update(t, dt) {
     dreamClock.value = t;
+    this.life.update(t);
     this._blendPalette(dt);
     this.skyMat.uniforms.uTime.value = t;
     this.clarityNow += ((this.clarityTarget ?? 0.2) - this.clarityNow) * Math.min(1, dt * 0.3);

@@ -127,6 +127,28 @@ export class UI {
 
   setMicLevel(v) { this.el('talk').style.setProperty('--level', (1 + v * 0.35).toFixed(3)); }
 
+  // The dream's quest, faint in a corner, and how far along it is.
+  quest(text, progress = 0, steps = 6, fulfilled = false) {
+    const box = document.getElementById('quest');
+    if (!box) return;
+    if (fulfilled) {
+      box.classList.add('fulfilled');
+      clearTimeout(this.questFade);
+      this.questFade = setTimeout(() => { box.classList.remove('show', 'fulfilled'); }, 9000);
+      return;
+    }
+    if (!text) { box.classList.remove('show'); return; }
+    box.hidden = false;
+    document.getElementById('quest-text').textContent = text;
+    const track = document.getElementById('quest-steps');
+    track.replaceChildren(...Array.from({ length: steps }, (_, i) => {
+      const dot = document.createElement('i');
+      if (i < progress) dot.className = 'done';
+      return dot;
+    }));
+    requestAnimationFrame(() => box.classList.add('show'));
+  }
+
   timings(m) {
     const el = this.el('timings');
     const names = { stt_s: 'hearing', first_words_s: 'first words', director_s: 'storyteller', tts_s: 'voice', to_first_sound_s: 'first sound', total_s: 'total' };

@@ -115,6 +115,8 @@ SETTING_WORDS: list[tuple[str, str]] = [
     ("mountains", "mountains"), ("מערה", "cave"), ("cave", "cave"), ("cavern", "cave"),
     ("עיר", "city"), ("city", "city"), ("town", "city"), ("ארץ מושלגת", "snow"),
     ("snowy land", "snow"), ("קרח", "snow"), ("ice", "snow"), ("glacier", "snow"),
+    ("frozen lake", "snow"), ("frozen sea", "snow"), ("frozen river", "snow"), ("tundra", "snow"),
+    ("arctic", "snow"), ("north pole", "snow"), ("אגם קפוא", "snow"), ("הקוטב", "snow"),
 ]
 
 WEATHER_WORDS = {"שלג": "snow", "snow": "snow", "snowing": "snow", "גשם": "rain", "rain": "rain",
@@ -150,7 +152,7 @@ HE_GLOSS = {"שועל": "fox", "צבי": "deer", "איילה": "deer", "חד ק�
             "תמנון": "octopus", "רובוט": "robot", "מלאך": "angel", "ינשוף": "owl", "נשר": "eagle",
             "אריה": "lion", "נמר": "tiger", "מלכת": "queen", "נסיכת": "princess",
             "הר געש": "volcano", "הרי געש": "volcano", "הר הגעש": "volcano", "לבה": "lava",
-            "דוב": "bear", "ארנב": "rabbit", "ארנבת": "rabbit", "ארנבון": "rabbit"}
+            "דוב": "bear", "ארנב": "rabbit", "ארנבת": "rabbit", "ארנבון": "rabbit", "ציפור": "bird"}
 
 PREFIXES = "והבלמשכ"
 HE = re.compile(r"[א-ת'\"\-]+")
@@ -159,6 +161,9 @@ EN = re.compile(r"[a-z']+")
 # of a clause; "את ה..." is the object marker, so a word with the article never counts.
 YOU_EN = re.compile(r"\b(you are|you're|youre|you become|you turn into|you've become)\b(.*)")
 YOU_HE = re.compile(r"(?:^|[\s.,!?;:])(ו?(?:את|אתה|הנך|נהיית|תהיי|תהיה)|הפכת ל|הופכת ל|הופך ל)(?=\s)(.*)")
+# The player speaking as the dreamer: "I am a small bird", "אני ציפור".
+ME_EN = re.compile(r"\b(i am|i'm|im|i become|i turn into|i've become)\b(.*)")
+ME_HE = re.compile(r"(?:^|[\s.,!?;:])(ו?(?:אני|נהייתי)|הפכתי ל)(?=\s)(.*)")
 EN_SKIP = {"a", "an", "the", "now", "actually", "really", "just", "also", "still", "very", "so", "my"}
 EN_STOP = {"in", "on", "at", "with", "near", "inside", "under", "from", "of", "to", "by", "and",
            "not", "no", "going", "flying", "holding", "standing", "sitting", "looking", "riding"}
@@ -262,6 +267,34 @@ def _form_after(lead: str, tail: str) -> tuple[str | None, str]:
     return None, ""
 
 
+def _gloss(word: str) -> str:
+    """An English word for a word of the player's (Hebrew through its gloss)."""
+    if word.isascii():
+        return word
+    return next((HE_GLOSS[b] for b in _bare(word) if b in HE_GLOSS), "")
+
+
+def beings_named(text: str) -> set[str]:
+    """English words for the beings and things the player's words name ("שועל" -> fox)."""
+    low = (text or "").lower()
+    out = {w for w in EN.findall(low) if w in _THING_INDEX}
+    for w in HE.findall(low):
+        out |= {HE_GLOSS[b] for b in _bare(w) if b in HE_GLOSS}
+    return out
+
+
+def self_words(text: str) -> set[str]:
+    """The words the player uses for the dreamer itself: "you are a fox", "I am a small bird"."""
+    low = " " + " ".join((text or "").lower().split()) + " "
+    out = set()
+    for pattern in (YOU_EN, YOU_HE, ME_EN, ME_HE):
+        for m in pattern.finditer(low):
+            _, word = _form_after(m.group(1).strip(), m.group(2))
+            if word and (g := _gloss(word)):
+                out.add(g)
+    return out
+
+
 def read(text: str) -> Heard:
     """What the player's words name, before any judgement about the scene."""
     heard = Heard()
@@ -339,19 +372,44 @@ def kind_of(label: str) -> str | None:
 
 
 # Words for going somewhere: without one of these (or a place named outright) the dream
-# stays where it is, so a castle "appearing" never drags the dreamer into a city.
+# stays where it is, so a castle "appearing" never drags the dreamer into a city. A journey
+# verb on its own, a verb of moving with a direction ("walk away", "follow the fox into the
+# cave"), or the Hebrew forms of both.
+_MOVE_EN = (r"go|goes|went|going|walk|walks|walked|walking|run|runs|ran|running|swim|swims|swam|"
+            r"swimming|head|heads|headed|heading|move|moves|moved|moving|wander|wanders|wandered|"
+            r"wandering|float|floats|floated|floating|drift|drifts|drifted|drifting|ride|rides|rode|"
+            r"riding|step|steps|stepped|jump|jumps|jumped|fall|falls|fell|hike|hikes|hiked|return|"
+            r"returns|returned|escape|escapes|escaped|follow|follows|followed|come|comes|came|"
+            r"glide|glides|glided|gliding|sneak|sneaks|sneaked|crawl|crawls|crawled|march|marches")
+_TOWARD_EN = r"to|into|toward|towards|away|off|out|across|through|inside|outside|back|beyond|onward|onwards"
+_MOVE_HE = ("טס|טסה|טסים|טסות|טסנו|טסתי|נטוס|אטוס|עף|עפה|עפים|עפות|עפנו|נעוף|אעוף|"
+            "הולך|הולכת|הולכים|הולכות|הלכנו|הלכתי|נלך|אלך|בוא נלך|בואו נלך|"
+            "מגיע|מגיעה|מגיעים|מגיעות|הגענו|הגעתי|נגיע|אגיע|נוחת|נוחתת|נוחתים|נחתנו|"
+            "נכנס|נכנסת|נכנסים|נכנסות|נכנסנו|נכנסתי|ניכנס|אכנס|יוצא|יוצאת|יוצאים|יוצאות|יצאנו|"
+            "יצאתי|נצא|אצא|מפליג|מפליגה|מפליגים|הפלגנו|נפליג|צולל|צוללת|צוללים|צללנו|נצלול|"
+            "מטפס|מטפסת|מטפסים|טיפסנו|נטפס|נופל|נופלת|נופלים|נפלנו|עובר|עוברת|עוברים|עברנו|"
+            "נעבור|אעבור|קופץ|קופצת|קופצים|קפצנו|נקפוץ|מתעורר|מתעוררת|התעוררנו|נשאב|נשאבת|"
+            "ממריא|ממריאה|ממריאים|המראנו|נוסע|נוסעת|נוסעים|נסענו|ניסע|אסע|רץ|רצה|רצים|רצות|"
+            "רצנו|נרוץ|ארוץ|שוחה|שוחים|שחינו|נשחה|נבלע|נבלעת|נסחף|נסחפת|נסחפים|בורח|בורחת|"
+            "בורחים|ברחנו|נברח|חוזר|חוזרת|חוזרים|חזרנו|נחזור|אחזור|מתרחק|מתרחקת|מתרחקים|"
+            "התרחקנו|נתרחק|צועד|צועדת|צועדים|צעדנו|רוכב|רוכבת|רוכבים|רכבנו|נרכב|"
+            "לוקח אותך|לוקחת אותך|לוקחים אותך|נושא אותך|נושאת אותך|מביא אותך|מביאה אותך|"
+            "בולע אותך|בולעת אותך")
 TRAVEL = re.compile(
-    r"\b(fly|flies|flew|flying|travel|travels|go to|goes to|went to|arrive|arrives|land|lands|"
-    r"teleport|sail|sails|swim to|walk to|walks into|enter|enters|wake up in|wakes up in|"
-    r"transported|fall into|falls into|dive|dives|climb|climbs|go outside|goes outside|"
-    r"step out|steps out|run to|runs to|ran to|jump into|jumps into|jumped into|"
-    r"takes you|take you|took you|carries you|carry you|carried you|brings you|bring you|"
-    r"brought you|swallows|swallow|swallowed)\b"
-    r"|(?:^|\s)ו?(טס|טסה|טסים|טסות|עף|עפה|עפים|הולך|הולכת|מגיע|מגיעה|נוחת|נוחתת|נכנס|נכנסת|"
-    r"מפליג|מפליגה|צולל|צוללת|מטפס|מטפסת|נופל|נופלת|עובר|עוברת|קופץ|קופצת|מתעורר|מתעוררת|"
-    r"נשאב|נשאבת|ממריא|ממריאה|נוסע|נוסעת|יוצא|יוצאת|רץ|רצה|שוחה|נבלע|נבלעת|נסחף|נסחפת|"
-    r"לוקח אותך|לוקחת אותך|לוקחים אותך|נושא אותך|נושאת אותך|מביא אותך|מביאה אותך|"
-    r"בולע אותך|בולעת אותך)(?=\s|$)")
+    r"\b(fly|flies|flew|flying|travel|travels|traveled|travelled|traveling|travelling|"
+    r"journey|journeys|journeyed|arrive|arrives|arrived|land|lands|landed|teleport|teleports|"
+    r"teleported|sail|sails|sailed|dive|dives|dived|dove|climb|climbs|climbed|enter|enters|"
+    r"entered|leave|leaves|leaving|wake up in|wakes up in|woke up in|transported|swallows|"
+    r"swallow|swallowed|go outside|goes outside|step out|steps out|"
+    r"(?:take|takes|took|carry|carries|carried|bring|brings|brought) (?:you|me|us))\b"
+    rf"|\b(?:{_MOVE_EN})\b(?:\s+[\w'-]+){{0,3}}?\s+(?:{_TOWARD_EN})\b"
+    r"(?!(?:\s+to)?\s+(?:me|us|you|him|her|them|it)\b)"       # "the fox walks to me" stays here
+    rf"|(?:^|\s)ו?(?:{_MOVE_HE})(?=\s|$)")
+
+
+def travels(text: str) -> bool:
+    """The player's words take the dreamer somewhere: a journey, or a named place."""
+    return bool(TRAVEL.search(" " + (text or "").lower() + " ")) or read(text).setting_phrase
 
 # The player ends the dream: waking up in bed, or saying it is over.
 ENDING = re.compile(
@@ -433,6 +491,12 @@ def nudge(out: TurnOutput, text: str, current_setting: str, current_form: str,
     if heard.effect and out.effect in ("none", "ripple"):
         out.effect = heard.effect
         notes.append(f"effect={heard.effect}")
+    # A journey ("we rise above the peaks") warps to the new place; the rising beam of light
+    # belongs to becoming divine and to the dream's end.
+    if (out.effect == "ascend" and heard.effect != "ascend" and not out.ending
+            and out.setting_kind not in ("same", current_setting)):
+        out.effect = "warp"
+        notes.append("effect=warp")
     if heard.weather and out.setting_weather == "same":
         out.setting_weather = heard.weather
         notes.append(f"weather={heard.weather}")
@@ -460,12 +524,18 @@ def nudge(out: TurnOutput, text: str, current_setting: str, current_form: str,
 
     # The dreamer is not a thing in its own dream: "you are a fox" sometimes comes back as an
     # added fox (or a "dog" labelled fox) next to the dreamer's own new form.
+    # Another being of the same family that the player named on its own ("I am a small bird,
+    # and beside me a white owl") stays: it is not the dreamer.
     form = out.self_form if out.self_form not in ("same", current_form) else None
     if form:
         words = {w for w in _EN_WORDS.get(form, set())} | ({heard.form_word} if heard.form_word.isascii() else set())
+        own = self_words(text) | set(EN.findall(out.self_label.lower())) | {form}
+        others = beings_named(text) - own
         before = len(out.add)
-        out.add = [t for t in out.add if t.kind != form and not any(
-            re.search(rf"\b{re.escape(w)}", t.label.lower()) for w in words if w)]
+        out.add = [t for t in out.add
+                   if any(re.search(rf"\b{re.escape(w)}", t.label.lower()) for w in others)
+                   or (t.kind != form and not any(re.search(rf"\b{re.escape(w)}", t.label.lower())
+                                                  for w in words if w))]
         if len(out.add) < before:
             notes.append("dropped a thing that was the dreamer itself")
 

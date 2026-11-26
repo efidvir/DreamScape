@@ -33,6 +33,16 @@ Everything on screen is made of brush strokes: soft, elongated splats, each turn
 
 Some kinds take their shape from the word that named them: a fish labelled dolphin, whale, shark or octopus is drawn as one, at its own size, and a bear or a rabbit gets its own build. A volcano runs with lava, throws embers and smoke, and erupts as it appears. When the storyteller files something as "other", the director reads its label with the same Hebrew and English word lists (plurals and feminine forms included, so "דולפינים" and "דולפינה" are dolphins) and draws it as the kind it names. Anything still outside the vocabulary appears as a slowly turning glow of its colour until its picture arrives.
 
+### Between your words
+
+The dream keeps living while you are quiet, the way a game master keeps a table going:
+
+- **Who comes along.** When the dream moves to a new place, the storyteller lists who comes with you, and so do your words: "the reindeer and I walk away" brings the reindeer, and "we go together" brings whoever the last exchange was about. Trees, houses and other scenery belong to their place. A journey the storyteller paints as a new place counts as one even when it is the same kind of place.
+- **The quiet minute.** A few seconds after each answer, the director asks the same model in the background what happens next: the dream's quest, what each being wants, and two to four beats (who does what, to whom). The page acts them out slowly over the next minute: beings approach, circle, follow, play and rest; things glow, grow, stretch, melt and spin; the camera glides to watch each beat and drifts there. When the plan runs out and you are still quiet, the page asks for more, at most every 40 seconds and for ten minutes after your last words. Your words come first: speaking stops the director's minute, and the camera comes back to the dreamer.
+- **The quest.** As soon as the story suggests something to find or reach, the director names it as a quest, shown faintly in the corner with six steps. Each answer that moves toward it fills one or two steps; the last one is celebrated in the next answer, and a new wish may follow.
+
+The craft comes from interactive drama and tabletop play: Façade's drama manager, which picks the next dramatic beat to shape the story's arc ([Mateas and Stern](https://users.soe.ucsc.edu/~michaelm/tenurereview/publications/mateas-tidse2003.pdf)); progress clocks from Blades in the Dark ([rules](https://roll20.net/compendium/BITD/Rules:Progress%20clocks)); a game master's habits of situations over plots and "yes, and" ([game-facilitator skill](https://skills.sh/jwynia/agent-skills/game-facilitator)); characters that plan their own day ([Generative Agents](https://arxiv.org/abs/2304.03442)); and an LLM drama manager kept on track by storylets ([Dramamancer](https://arxiv.org/abs/2601.18785)).
+
 ## Run it
 
 You need Docker Desktop (WSL 2 backend), an NVIDIA driver with WSL support, and about 15 GB of free disk for images and models.
@@ -180,4 +190,7 @@ Each service has its own tests: `cd services/<director|web|voice|imagery> && pip
 - While an answer is being written, the dream page draws at half rate; at full rate it shared the graphics card so heavily that the storyteller slowed to a crawl after a few turns.
 - The dreamer is easier to see: pale colours are drawn a shade greyer so their shape stays readable, animals turn their side to the viewer, small beings (a bird, a fish) are drawn at least 1.2 m big, mist thins out between the viewer and the dreamer, and snow by night is moonlit blue-grey.
 - More words are understood: whales, robots, owls, queens and princesses of somewhere, travel phrases ("takes you to", "יוצא החוצה") and places said with ב or ל ("בעננים").
+- The dream goes on between your words: a quiet director gives it a quest, gives each being a wish, and plans what happens next, and the page acts it out with moving beings, changing things and a travelling camera.
+- Beings follow the story from place to place: the storyteller and your words decide who comes along, and the rest stays behind.
+- The page draws at most 60 frames a second, and 30 while any answer is being written or while it waits behind another window, so a fast laptop screen leaves the graphics card to the storyteller.
 - The old Google service-account key files are gone from the tree. They are still in git history and on GitHub, so delete that key in the Google Cloud console.

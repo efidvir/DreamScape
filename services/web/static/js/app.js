@@ -64,7 +64,11 @@ net.on('status', (m) => { ui.setStatus(m.services); ui.waking(m.services); })
   .on('backdrop', (m) => world.setBackdrop(m.url, m.relief, m.place))
   .on('sprite', (m) => world.setSprite(m.id, m.url, m.relief))
   .on('notice', (m) => { ui.notice(m.key, m.detail); if (m.key === 'stumbled') ui.clearWaiting(); if (m.detail) console.warn('dreamscape:', m.key, m.detail); })
-  .on('timings', (m) => ui.timings(m));
+  .on('timings', (m) => ui.timings(m))
+  .on('writing', (m) => { dream.storytellerBusy = !!m.on; })
+  // The quiet minute: what happens next by itself, and the dream's quest.
+  .on('beats', (m) => { world.life.plan(m.next); ui.quest(m.quest, m.progress, m.steps, m.fulfilled); });
+world.life.onNeed = () => net.send({ type: 'more' });
 
 // Before entering, the card shows what is still loading (the live link starts on entering).
 async function pollStatus() {

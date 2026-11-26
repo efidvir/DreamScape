@@ -6,7 +6,12 @@ export class Net {
   }
 
   on(type, fn) { (this.handlers[type] ||= []).push(fn); return this; }
-  emit(type, msg) { for (const fn of this.handlers[type] || []) fn(msg); }
+  // One handler's mistake must not keep the others from hearing the message.
+  emit(type, msg) {
+    for (const fn of this.handlers[type] || []) {
+      try { fn(msg); } catch (e) { console.error(`dreamscape: the "${type}" message failed`, e); }
+    }
+  }
 
   connect() {
     const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;

@@ -4,7 +4,8 @@
 
 The fake Ollama plays a scripted story keyed on words the player uses (English or Hebrew):
 fairy/forest, spaceship/moon, cheese, eat/god, dragon, castle, sea, cat, rain, snow, desert,
-city, cave, underwater, house, portal, unicorn, flowers, mushrooms, crystals, ghost.
+city, cave, underwater, house, portal, unicorn, flowers, mushrooms, crystals, ghost. Between
+the player's words it plays the quiet director: a quest that grows, and beings that move.
 """
 from __future__ import annotations
 
@@ -107,6 +108,43 @@ def _story_reply(messages: list[dict]) -> dict:
     return out
 
 
+# The quiet director's minute: a quest that grows a step each time, and the beings in the
+# dream state meeting, playing and changing shape while the player is silent.
+QUEST = {"English": ("find the hidden light", "Find the hidden light"),
+         "Hebrew": ("find the hidden light", "למצוא את האור הנסתר")}
+BEINGS = {"fairy", "butterfly", "bird", "fish", "cat", "dog", "wolf", "horse", "dragon", "person",   # as in
+          "ghost", "fireflies", "spaceship", "boat", "orb", "lantern"}                           # life.js
+MOVES = ["approach", "circle", "play", "follow", "rest", "wander"]
+CHANGES = ["glow", "spin", "grow", "stretch", "shrink"]
+
+
+DIRECTED = 0
+
+
+def _direction_reply(messages: list[dict]) -> dict:
+    global DIRECTED
+    DIRECTED += 1
+    last, n = messages[-1]["content"] if messages else "", DIRECTED
+    language = "Hebrew" if "few words of Hebrew" in last else "English"
+    state = last.split("[DREAM STATE]")[-1].split("\n[")[0]
+    ids = re.findall(r"^- ([a-z0-9][a-z0-9-]*): ([a-z]+)", state, re.M)
+    done = re.search(r"\((\d+) of \d+ done\)", last)
+    beings = [i for i, kind in ids if kind in BEINGS] + ["self"]
+    things = [i for i, _ in ids if i not in beings]
+    nxt = []
+    for k in range(3):
+        if things and k == 2:
+            nxt.append({"who": things[(n + k) % len(things)], "does": CHANGES[(n + k) % len(CHANGES)], "to": ""})
+            continue
+        who = beings[(n + k) % len(beings)]
+        to = next((b for b in beings[k + 1:] + beings[:k] if b != who), "")
+        nxt.append({"who": who, "does": MOVES[(n + k) % len(MOVES)], "to": to})
+    quest, shown = QUEST[language]
+    return {"quest": quest, "shown": shown, "progress": (int(done.group(1)) if done else 0) + 1,
+            "wants": [{"id": b, "want": "to show the way"} for b in beings[:1] if b != "self"],
+            "next": nxt, "hint": "Something glows softly at the edge of the dream."}
+
+
 ollama = FastAPI(title="fake ollama")
 
 
@@ -141,9 +179,12 @@ async def ps():
 @ollama.post("/api/chat")
 async def chat(req: Request):
     body = await req.json()
-    out = _story_reply(body.get("messages", []))
-    order = ["facts", "voice", "reply"]            # the real model writes the words early
-    text = json.dumps({**{k: out[k] for k in order if k in out}, **out}, ensure_ascii=False)
+    if "quest" in ((body.get("format") or {}).get("properties") or {}):
+        text = json.dumps(_direction_reply(body.get("messages", [])), ensure_ascii=False)
+    else:
+        out = _story_reply(body.get("messages", []))
+        order = ["facts", "voice", "reply"]        # the real model writes the words early
+        text = json.dumps({**{k: out[k] for k in order if k in out}, **out}, ensure_ascii=False)
     if not body.get("stream"):
         return {"message": {"role": "assistant", "content": text},
                 "done": True, "eval_count": 180, "eval_duration": 2_000_000_000}

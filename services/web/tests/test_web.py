@@ -57,6 +57,9 @@ def fake_backend(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"RIFF....WAVE", headers={"content-type": "audio/wav"})
     if path == "/stt":
         return httpx.Response(200, json={"text": STATE["stt_text"]})
+    if path == "/direct":
+        STATE.setdefault("directed", []).append(json.loads(request.content))
+        return httpx.Response(200, json=STATE.get("direction") or {"next": []})
     return httpx.Response(404)
 
 
@@ -405,3 +408,24 @@ def test_hebrew_is_read_for_who_speaks_and_who_listens(client):
         _until(ws, "timings")
     spoken = [b for b in STATE["spoken"] if "הים" in b["text"]]
     assert spoken and all(b["speaker"] == 2 and b["listener"] == 2 for b in spoken)
+
+
+def test_the_quiet_minute_follows_each_turn_and_more_is_asked_for(client, monkeypatch):
+    monkeypatch.setattr(main, "DIRECT_AFTER_S", 0)
+    monkeypatch.setattr(main, "DIRECT_EVERY_S", 0)
+    STATE["directed"] = []
+    STATE["direction"] = {"quest": "find the lost song", "shown": "find the lost song", "progress": 2,
+                          "steps": 6, "fulfilled": False,
+                          "next": [{"who": "t", "does": "glow", "to": ""}]}
+    with client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session": "abcdef801", "lang": "en"})
+        _until(ws, "audio")
+        ws.send_json({"type": "text", "text": "you are a fairy in a forest", "lang": None})
+        assert _until(ws, "writing")["on"] is True      # every page draws less while it is written
+        assert _until(ws, "writing")["on"] is False
+        beats = _until(ws, "beats")
+        assert beats["next"] == [{"who": "t", "does": "glow", "to": ""}]
+        assert beats["quest"] == "find the lost song" and beats["progress"] == 2 and beats["steps"] == 6
+        ws.send_json({"type": "more"})                  # the page acted it out: the next minute
+        _until(ws, "beats")
+    assert [d["session_id"] for d in STATE["directed"]] == ["abcdef801", "abcdef801"]

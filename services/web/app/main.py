@@ -37,6 +37,11 @@ logging.getLogger("uvicorn.access").addFilter(_QuietHealth())
 DIRECTOR_URL = os.environ.get("DIRECTOR_URL", "http://director:9010").rstrip("/")
 VOICE_URL = os.environ.get("VOICE_URL", "http://voice:9020").rstrip("/")
 IMAGERY_URL = os.environ.get("IMAGERY_URL", "").rstrip("/")
+# The quiet minute: a few seconds after the dreamer has spoken, the storyteller's director
+# decides what happens next by itself; the page asks again when it has acted that out.
+DIRECT_AFTER_S = float(os.environ.get("DIRECT_AFTER_S", "3"))
+DIRECT_EVERY_S = float(os.environ.get("DIRECT_EVERY_S", "40"))     # at most this often
+DIRECT_IDLE_MAX_S = float(os.environ.get("DIRECT_IDLE_MAX_S", "600"))  # then the dream rests
 HEARTBEAT_S = float(os.environ.get("HEARTBEAT_S", "3"))
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 STARTED = time.time()
@@ -230,6 +235,12 @@ async def broadcast(msg: dict):
         await c.send(msg)
 
 
+async def tell_writing():
+    """Every open page draws fewer frames while the storyteller writes anyone's answer: the
+    model and the pages share one graphics card."""
+    await broadcast({"type": "writing", "on": any(c.busy for c in clients)})
+
+
 # --------------------------------------------------------------------------- one connected player
 class Dreamer:
     def __init__(self, ws: WebSocket):
@@ -246,6 +257,9 @@ class Dreamer:
         self.pending: dict | None = None    # the player's last words, waiting for a service to wake up
         self.next_up = False                # ...or for the dreamer to finish its answer
         self.clip_log: list[tuple] = []     # (seconds since speak() began, synthesis seconds)
+        self.directing: asyncio.Task | None = None
+        self.directed_at = 0.0
+        self.last_turn_at = time.time()
 
     async def send(self, msg: dict):
         if self.ws.client_state != WebSocketState.CONNECTED:
@@ -291,6 +305,8 @@ class Dreamer:
                          "facts": d.get("facts", [])})
         if d.get("scene"):
             self.request_pictures(d["scene"], [], everything=True)
+            if d.get("resumed"):
+                self.direct_soon(6)          # a dream picked up again comes alive by itself
         if not d.get("resumed") and self.last_reply:
             await self.speak(self.last_reply, self.lang)
 
@@ -332,6 +348,9 @@ class Dreamer:
             return await self.wait_for("stt", {"audio": audio, "mime": mime, "lang_hint": lang_hint,
                                                "tries": tries})
         self.busy = True
+        self.stop_directing()               # the player's words come first
+        await tell_writing()
+        self.last_turn_at = time.time()
         t0 = time.perf_counter()
         timings = {}
         self.clip_log = []
@@ -435,12 +454,52 @@ class Dreamer:
             timings["total_s"] = round(time.perf_counter() - t0, 2)
             timings["clips"] = self.clip_log[-8:]
             await self.send({"type": "timings", **timings})
+            if not d.get("fallback") and not d.get("ending"):
+                self.direct_soon(DIRECT_AFTER_S)
         finally:
             self.busy = False
+            await tell_writing()
             await self.stage("idle")
             if self.next_up:                # words that arrived meanwhile go next, at once
                 self.next_up = False
                 self.kick()
+
+    # ----------------------------------------------------------------- the quiet minute
+    def stop_directing(self):
+        if self.directing and not self.directing.done():
+            self.directing.cancel()
+        self.directing = None
+
+    def direct_soon(self, delay: float):
+        self.stop_directing()
+        self.directing = asyncio.create_task(self._direct(delay))
+
+    def more(self):
+        """The page has acted out what it was given and the player is still quiet."""
+        idle = time.time() - self.last_turn_at
+        if (self.busy or self.pending or time.time() - self.directed_at < DIRECT_EVERY_S
+                or idle > DIRECT_IDLE_MAX_S or (self.directing and not self.directing.done())):
+            return
+        self.direct_soon(0)
+
+    async def _direct(self, delay: float):
+        await asyncio.sleep(delay)
+        if self.busy or not monitor.ready("director"):
+            return
+        self.directed_at = time.time()
+        try:
+            r = await http.post(f"{DIRECTOR_URL}/direct", timeout=60,
+                                json={"session_id": self.session, "pictures": monitor.ok("imagery")})
+            if r.status_code != 200:
+                return                      # interrupted by the player, or nothing to do
+            d = r.json()
+        except Exception as e:  # noqa: BLE001 - a quiet minute can always be skipped
+            log.info("director's minute skipped: %s", e)
+            return
+        if d.get("next") or d.get("quest") or d.get("fulfilled"):
+            await self.send({"type": "beats", "next": d.get("next", []), "quest": d.get("shown") or "",
+                             "progress": d.get("progress", 0), "steps": d.get("steps", 6),
+                             "fulfilled": bool(d.get("fulfilled"))})
 
     async def transcribe(self, audio: bytes, mime: str, lang_hint: str | None) -> str | None:
         """The words heard, "" for silence, None when hearing failed."""
@@ -762,10 +821,13 @@ async def ws_endpoint(ws: WebSocket):
                 spawn(d.reset(data))
             elif kind == "ping":
                 await d.send({"type": "pong", "t": data.get("t")})
+            elif kind == "more":
+                d.more()
     except WebSocketDisconnect:
         pass
     finally:
         clients.discard(d)
+        d.stop_directing()
         for t in tasks:
             t.cancel()
 

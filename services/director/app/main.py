@@ -14,12 +14,12 @@ from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from . import guard, hebrew, lexicon, prompt, vocab
 from .llm import Ollama, parse_json_loose
-from .schema import TurnOutput, parse_turn, turn_schema
+from .schema import TurnOutput, direction_schema, parse_direction, parse_turn, turn_schema
 from .story import SESSION_ID_RE, SessionStore
 
 logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -48,6 +48,7 @@ FALLBACK_LINES = set(prompt.FALLBACK.values())
 
 STARTED = time.time()
 SCHEMAS = {True: turn_schema(pictures=True), False: turn_schema(pictures=False)}
+DIRECTION_SCHEMA = direction_schema()
 llm = Ollama(OLLAMA_URL, LLM_MODEL,
              # Kept loaded while the game runs (the watchdog reloads it if Ollama restarts).
              keep_alive=os.environ.get("LLM_KEEP_ALIVE", "-1"),
@@ -60,6 +61,9 @@ locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 stats = {"turns": 0, "fallbacks": 0, "wrong_language": 0, "softened": 0}
 # The last few raw model answers, for /debug/recent (tuning the prompt on a live game).
 recent: deque[dict] = deque(maxlen=20)
+# The quiet director's calls in flight, by session: a turn stops them all, since the
+# player's words always come first on the one model.
+directing: dict[str, asyncio.Task] = {}
 
 
 # One tiny chat after loading, so the fixed prompt prefix is already cached for the first turn.
@@ -85,6 +89,11 @@ SessionId = Annotated[str, Field(min_length=6, max_length=64, pattern=SESSION_ID
 class SessionIn(BaseModel):
     session_id: SessionId
     lang: str = "he"
+
+
+class DirectIn(BaseModel):
+    session_id: SessionId
+    pictures: bool = False
 
 
 class TurnIn(BaseModel):
@@ -114,6 +123,38 @@ async def _wait_ready(timeout: float) -> bool:
             return False
         await asyncio.sleep(0.5)
     return True
+
+
+_WORD = re.compile(r"[a-z]{3,}")
+_COMMON = {"the", "and", "with", "from", "into", "that", "this", "your", "you", "are", "for", "but",
+           "its", "his", "her", "their", "big", "small", "little", "giant", "tiny", "old", "young"}
+# Going somewhere together: the companions of the last exchange come along too.
+TOGETHER = re.compile(r"\b(together|with you|with me|with us|all of us|we all)\b|(?:^|\s)ו?(ביחד|יחד|איתנו|איתי|איתך|כולנו)(?=\s|$)")
+
+
+def _named(sess, text: str) -> set[str]:
+    """Ids of the things these words name: a word of the label or id, or the kind."""
+    low = (text or "").lower()
+    kinds = {k for k, _, _ in lexicon.read(text).things if k != "other"}
+    words = set(_WORD.findall(low))
+    for w in lexicon.HE.findall(low):
+        words |= {lexicon.HE_GLOSS[b] for b in lexicon._bare(w) if b in lexicon.HE_GLOSS}
+    out = set()
+    for tid, t in sess.things.items():
+        names = set(_WORD.findall(f"{t['label']} {tid.replace('-', ' ')}".lower())) - _COMMON
+        if t["kind"] in kinds or names & words:
+            out.add(tid)
+    return out
+
+
+def _coming_along(sess, text: str) -> set[str]:
+    """Who the player's words bring along to a new place: those they name ("the reindeer and
+    I walk away together"), else, when they go together, whoever the last exchange was about."""
+    along = _named(sess, text)
+    if not along and TOGETHER.search(" " + (text or "").lower() + " "):
+        for h in sess.history[-2:]:
+            along |= _named(sess, h["text"])
+    return along
 
 
 def _listener(sess, words: str) -> str:
@@ -370,6 +411,8 @@ async def _turn_events(body: TurnIn):
     """One turn as events: ("first", the reply's first sentence) as soon as the model has
     written it, ("reply", all the words) once they are complete, then ("final", the whole
     payload). Must be entered after the model is ready."""
+    for task in list(directing.values()):      # the player's words come first
+        task.cancel()
     sess = _load(body.session_id) or store.create(body.session_id, _lang(body.lang))
     said = " ".join(body.text.split())
     # Words the dream leaves out dissolve before the storyteller hears them, and the page
@@ -483,8 +526,11 @@ async def _turn_events(body: TurnIn):
                               current_label=sess.self_label)
         if recent:
             recent[-1]["nudged"] = notes
+        along = _coming_along(sess, text)
+        # A journey the storyteller paints as a new place is a new place, even of the same kind.
+        moved = bool(out.backdrop) and lexicon.travels(text)
         sess.remember("user", text)
-        change = sess.apply(out)
+        change = sess.apply(out, mentioned=along, moved=moved)
         if sess.voice == "neutral":
             sess.voice = hebrew.self_gender(out.reply) or "neutral"   # its words chose a gender
         reply = out.reply
@@ -546,3 +592,51 @@ async def turn_stream(body: TurnIn):
             yield json.dumps({"type": kind, **payload}, ensure_ascii=False) + "\n"
 
     return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+
+# --------------------------------------------------------------------------- the director
+async def _direction(sess, pictures: bool) -> dict:
+    msgs = prompt.direction_messages(sess.summary(), sess.history, sess.lang, sess.now_line(),
+                                     pictures=pictures)
+    written = ""
+    async with aclosing(llm.chat_stream(msgs, DIRECTION_SCHEMA, max_tokens=300, temperature=0.75)) as stream:
+        async for piece in stream:
+            written += piece
+    return parse_json_loose(written)
+
+
+@app.post("/direct")
+async def direct(body: DirectIn):
+    """The quiet minute after a turn: the dream's quest and its progress, what the beings
+    want, and two to four slow things that happen next (for the page to act out). Gives way
+    at once when the player speaks (HTTP 409)."""
+    sess = _load(body.session_id)
+    if sess is None or sess.ended or sess.turn == 0:
+        return {"next": [], "skipped": True}
+    if not await _wait_ready(1):
+        raise HTTPException(503, detail={"state": llm.state})
+    at_turn = sess.turn
+    old = directing.pop(sess.id, None)
+    if old:
+        old.cancel()
+    task = asyncio.create_task(_direction(sess, body.pictures))
+    directing[sess.id] = task
+    try:
+        raw = await task
+    except asyncio.CancelledError:
+        if asyncio.current_task().cancelling():
+            raise                              # the caller went away
+        return JSONResponse({"interrupted": True}, status_code=409)
+    except Exception as e:  # noqa: BLE001 - a quiet minute can always be skipped
+        log.warning("director failed: %s: %s", type(e).__name__, e)
+        return JSONResponse({"error": f"{type(e).__name__}"}, status_code=502)
+    finally:
+        if directing.get(sess.id) is task:
+            directing.pop(sess.id, None)
+    if sess.turn != at_turn:                   # a turn came in between: this minute is past
+        return {"next": [], "stale": True}
+    async with locks[sess.id]:
+        result = sess.apply_direction(parse_direction(raw, set(sess.things)))
+        store.save(sess)
+    recent.append({"time": round(time.time()), "session": sess.id, "direction": raw})
+    return result

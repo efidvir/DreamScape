@@ -308,6 +308,19 @@ def test_the_dreamer_is_never_also_a_thing():
     assert out.self_form == "wolf" and [t.id for t in out.add] == ["moon"]
 
 
+def test_a_named_being_of_the_dreamers_family_is_not_the_dreamer():
+    from app.lexicon import nudge
+    from app.schema import ThingSpec, TurnOutput
+    out = TurnOutput(reply="...", self_form="bird", add=[ThingSpec(id="red-fox", kind="wolf", label="red fox"),
+                                                         ThingSpec(id="white-owl", kind="bird", label="white owl")])
+    nudge(out, "אני ציפור קטנה ביער, ולידי שועל אדום וינשוף לבן", "void", "wisp", "neutral", set(), [])
+    assert [t.id for t in out.add] == ["red-fox", "white-owl"]
+    # the dreamer's own word still keeps a second copy of it out
+    out = TurnOutput(reply="...", self_form="bird", add=[ThingSpec(id="bird", kind="bird", label="small bird")])
+    nudge(out, "I am a small bird in the forest", "void", "wisp", "neutral", set(), [])
+    assert "bird" not in [t.id for t in out.add]
+
+
 def test_now_line_reads_naturally():
     from app.story import Session
     s = Session(id="abcdef")
@@ -582,3 +595,193 @@ def test_things_the_model_drew_under_another_kind_are_not_added_again():
     out = TurnOutput(reply="...", add=[ThingSpec(id="tree", kind="tree", label="giant tree with glowing fruit")])
     nudge(out, "באי יש עץ ענק עם פירות זוהרים", "ocean", "fish", "female", set(), [])
     assert [t.kind for t in out.add] == ["tree"]
+
+
+# --------------------------------------------------------------------------- continuity
+
+OCEAN = {"reply": "The sea glitters around me.", "setting": {"kind": "ocean", "time": "night", "weather": "clear"},
+         "add": [{"id": "dolphins", "kind": "fish", "label": "dolphins", "color": "blue", "size": "medium",
+                  "count": 3, "where": "around", "motion": "swim"},
+                 {"id": "whale", "kind": "fish", "label": "giant whale", "color": "grey", "size": "huge",
+                  "count": 1, "where": "far", "motion": "swim"},
+                 {"id": "red-fox", "kind": "wolf", "label": "red fox", "color": "orange", "size": "small",
+                  "count": 1, "where": "near", "motion": "walk"},
+                 {"id": "white-owl", "kind": "bird", "label": "white owl", "color": "white", "size": "small",
+                  "count": 1, "where": "near", "motion": "float"}]}
+
+
+def _travel(client, monkeypatch, sid, words, answer):
+    monkeypatch.setattr(main.llm, "chat_stream", FakeLLM([OCEAN, answer]))
+    client.post("/session", json={"session_id": sid, "lang": "en"})
+    client.post("/turn", json={"session_id": sid, "text": "we are at sea with dolphins, a whale, a fox and an owl"})
+    return client.post("/turn", json={"session_id": sid, "text": words}).json()
+
+
+def test_only_who_comes_along_follows_to_a_new_place(client, monkeypatch):
+    forest = {"reply": "We land among snowy pines.", "setting": {"kind": "forest", "time": "dawn", "weather": "snow"},
+              "keep": ["white-owl"]}
+    r = _travel(client, monkeypatch, "continuity-1", "We fly to a snowy forest", forest)
+    ids = {t["id"] for t in r["scene"]["things"]}
+    assert ids == {"white-owl"}                                     # the storyteller kept the owl
+    assert set(r["removed"]) == {"dolphins", "whale", "red-fox"}
+
+
+def test_named_beings_come_along_and_together_brings_the_last_ones(client, monkeypatch):
+    forest = {"reply": "Pines and snow.", "setting": {"kind": "forest", "time": "dawn", "weather": "snow"}}
+    r = _travel(client, monkeypatch, "continuity-2", "The fox and I run to the forest", forest)
+    assert {t["id"] for t in r["scene"]["things"]} == {"red-fox"}
+    # in Hebrew, by the animal's name
+    r = _travel(client, monkeypatch, "continuity-3", "השועל ואני טסים ליער", {**forest, "reply": "אורנים ושלג."})
+    assert {t["id"] for t in r["scene"]["things"]} == {"red-fox"}
+    # "together": whoever the last exchange was about
+    calm = {"reply": "The owl lands on my shoulder.", "change": [{"id": "white-owl", "color": "", "size": "same",
+                                                                    "where": "near", "motion": "same"}]}
+    monkeypatch.setattr(main.llm, "chat_stream", FakeLLM([OCEAN, calm, forest]))
+    sid = "continuity-4"
+    client.post("/session", json={"session_id": sid, "lang": "en"})
+    client.post("/turn", json={"session_id": sid, "text": "we are at sea with dolphins, a whale, a fox and an owl"})
+    client.post("/turn", json={"session_id": sid, "text": "the owl lands on your shoulder"})
+    r = client.post("/turn", json={"session_id": sid, "text": "we fly together to the forest"}).json()
+    assert {t["id"] for t in r["scene"]["things"]} == {"white-owl"}
+
+
+def test_walking_away_together_is_a_journey(client, monkeypatch):
+    # "walk away ... to a frozen lake" moves the dream; the fox the words name comes along,
+    # though the last exchange was about everyone at sea.
+    lake = {"reply": "Ice stretches under the stars.", "setting": {"kind": "snow", "time": "night", "weather": "clear"},
+            "keep": [], "backdrop": "a frozen lake under the stars"}
+    r = _travel(client, monkeypatch, "continuity-5", "The fox and I walk away together to a frozen lake", lake)
+    assert r["scene"]["setting"]["kind"] == "snow"
+    assert {t["id"] for t in r["scene"]["things"]} == {"red-fox"}
+    # rising to the mountains is a journey: it warps there (the beam of light is for gods)
+    peaks = {"reply": "We rise above the frozen silence.", "effect": "ascend",
+             "setting": {"kind": "mountains", "time": "dawn", "weather": "snow"}, "keep": ["red-fox"]}
+    r = _travel(client, monkeypatch, "continuity-8", "Only the fox and I fly away to the snowy mountains", peaks)
+    assert r["effect"] == "warp" and {t["id"] for t in r["scene"]["things"]} == {"red-fox"}
+
+
+def test_a_painted_journey_of_the_same_kind_is_a_new_place(client, monkeypatch):
+    # The storyteller stays at sea but paints a new place for the journey: still a new place.
+    cove = {"reply": "We reach a quiet cove.", "keep": ["dolphins"], "backdrop": "a quiet cove at night"}
+    r = _travel(client, monkeypatch, "continuity-6", "we swim away to a hidden cove", cove)
+    assert r["scene"]["setting"]["kind"] == "ocean"
+    assert {t["id"] for t in r["scene"]["things"]} == {"dolphins"}
+    # A new picture without a journey changes nothing about who is here.
+    sky = {"reply": "The sky turns violet.", "backdrop": "a violet sky over the sea"}
+    r = _travel(client, monkeypatch, "continuity-7", "the sky turns violet", sky)
+    assert len(r["scene"]["things"]) == 4
+
+
+def test_travel_words():
+    from app import lexicon
+    for words in ("The reindeer and I walk away together to a frozen lake", "I follow the fox into the cave",
+                  "we go back home", "I wander off into the mist", "השועל ואני הולכים לאגם", "בואו נלך מכאן"):
+        assert lexicon.travels(words), words
+    for words in ("the fox walks to me", "the fox comes back to me", "I see a mountain far away",
+                  "I stay here and watch", "I fall asleep"):
+        assert not lexicon.travels(words), words
+
+
+def test_scenery_stays_in_its_place_unless_kept():
+    from app.schema import TurnOutput
+    from app.story import Session
+    s = Session(id="scenery-1")
+    s.things = {"pines": {"id": "pines", "kind": "tree", "label": "pines", "color": "", "size": "large",
+                          "count": 9, "where": "around", "motion": "still", "born": 1}}
+    out = TurnOutput(reply="x", setting_kind="moon")
+    assert s.apply(out, mentioned={"pines"})["removed"] == ["pines"]     # named, but it belongs to the forest
+
+
+# --------------------------------------------------------------------------- the director
+
+def test_a_quest_grows_step_by_step_and_is_celebrated():
+    from app.schema import Direction
+    from app.story import Session
+    s = Session(id="quest-1")
+    s.things = {"red-fox": {"id": "red-fox", "kind": "wolf", "label": "red fox", "color": "", "size": "small",
+                            "count": 1, "where": "near", "motion": "walk", "born": 1}}
+    r = s.apply_direction(Direction(quest="find the moon's lost song", shown="find the lost song", progress=5,
+                                    wants={"red-fox": "to show the way", "ghost": "x"}))
+    assert r["quest"] == "find the moon's lost song" and r["progress"] == 2     # two steps at most per minute
+    assert s.wants == {"red-fox": "to show the way"}
+    s.apply_direction(Direction(quest="", progress=0))                       # never dropped half-way
+    assert s.quest and s.progress == 2
+    s.apply_direction(Direction(quest="find the lost song of the moon", progress=3))     # said anew
+    assert s.quest == "find the lost song of the moon" and s.progress == 3
+    s.apply_direction(Direction(quest="same", progress=4))
+    r = s.apply_direction(Direction(quest="same", progress=6))
+    assert r["fulfilled"] and s.fulfilled == "find the lost song of the moon" and not s.quest
+    assert "fulfilled" in s.summary()
+    s.apply(__import__("app.schema", fromlist=["TurnOutput"]).TurnOutput(reply="hooray"))
+    assert not s.fulfilled                                                   # celebrated once
+
+
+def test_the_director_writes_the_next_quiet_minute(client, monkeypatch):
+    plan = {"quest": "help the fox find its den", "shown": "help the fox home", "progress": 1,
+            "wants": [{"id": "red-fox", "want": "to find its den"}],
+            "next": [{"who": "red-fox", "does": "approach", "to": "white-owl"},
+                     {"who": "whale", "does": "melt", "to": ""},            # not in the dream: dropped
+                     {"who": "white-owl", "does": "circle", "to": "self"}],
+            "hint": "The fox sniffs the snow for a trail."}
+    forest = {"reply": "Pines and snow.", "setting": {"kind": "forest", "time": "dawn", "weather": "snow"},
+              "keep": ["red-fox", "white-owl"]}
+    fake = FakeLLM([OCEAN, forest, plan])
+    monkeypatch.setattr(main.llm, "chat_stream", fake)
+    sid = "director-1"
+    client.post("/session", json={"session_id": sid, "lang": "en"})
+    client.post("/turn", json={"session_id": sid, "text": "we are at sea with dolphins, a whale, a fox and an owl"})
+    client.post("/turn", json={"session_id": sid, "text": "we fly to a snowy forest"})
+    r = client.post("/direct", json={"session_id": sid}).json()
+    assert r["quest"] == "help the fox find its den" and r["progress"] == 1 and r["steps"] == 6
+    assert r["next"] == [{"who": "red-fox", "does": "approach", "to": "white-owl"},
+                         {"who": "white-owl", "does": "circle", "to": "self"}]
+    # the next turn's prompt knows the quest, the wants and what is quietly happening
+    turn_prompt = fake.calls[-1][-1]["content"]
+    assert "[DIRECTOR]" in turn_prompt
+    monkeypatch.setattr(main.llm, "chat_stream", FakeLLM([{"reply": "The fox looks back at me."}]))
+    client.post("/turn", json={"session_id": sid, "text": "what is the fox doing?"})
+    sess = main.store.get(sid)
+    summary = sess.summary()
+    assert "help the fox find its den (1 of 6" in summary and "wants to find its den" in summary
+    # the director opens like a turn, so the model's cached prompt is reused
+    n = 1 + 2 * len(prompt.EXAMPLES)
+    assert prompt.direction_messages("a", [], "en")[:n] == prompt.build_messages("b", [], "y", "en")[:n]
+
+
+def test_the_player_interrupts_the_director(client, monkeypatch):
+    import asyncio
+    import threading
+
+    started = threading.Event()
+
+    class Slow:
+        def __init__(self):
+            self.n = 0
+
+        async def __call__(self, messages, schema, max_tokens=420, temperature=None, model=None):
+            self.n += 1
+            if "[DIRECTOR]" in messages[-1]["content"]:
+                started.set()
+                await asyncio.sleep(30)
+                yield "{}"
+                return
+            for i, piece in enumerate([json.dumps({"reply": "Hello again."})]):
+                yield piece
+
+    monkeypatch.setattr(main.llm, "chat_stream", FakeLLM([OCEAN]))
+    sid = "director-2"
+    client.post("/session", json={"session_id": sid, "lang": "en"})
+    client.post("/turn", json={"session_id": sid, "text": "we are at sea"})
+    monkeypatch.setattr(main.llm, "chat_stream", Slow())
+    out = {}
+
+    def ask():
+        out["r"] = client.post("/direct", json={"session_id": sid})
+
+    t = threading.Thread(target=ask)
+    t.start()
+    assert started.wait(5)
+    r = client.post("/turn", json={"session_id": sid, "text": "hello"})
+    t.join(10)
+    assert r.json()["reply"] == "Hello again."
+    assert out["r"].status_code == 409

@@ -78,6 +78,12 @@ SIZES = {"tiny": 0.35, "small": 0.65, "medium": 1.0, "large": 1.9, "huge": 4.0}
 WHERE = ["center", "near", "far", "left", "right", "above", "ground", "around", "sky"]
 MOTIONS = ["still", "float", "drift", "orbit", "buzz", "fly", "swim", "walk", "spin", "pulse"]
 EFFECTS = ["none", "sparkle", "flash", "ripple", "warp", "ascend", "darken", "bloom"]
+
+# What the dream does by itself between the player's words, slowly (the page acts it out):
+# beings meet, follow, play and rest; objects change shape and light.
+ACTIONS = ["approach", "circle", "follow", "flee", "wander", "rest", "play", "look", "rise", "sink",
+           "return", "grow", "shrink", "stretch", "melt", "spin", "glow", "dim"]
+QUEST_STEPS = 6          # a quest's progress runs from 0 to this
 VOICES = ["neutral", "female", "male"]
 
 # Sensible defaults when the model leaves something vague.

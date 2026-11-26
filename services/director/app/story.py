@@ -10,15 +10,16 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from . import vocab
-from .schema import TurnOutput
+from .schema import Direction, TurnOutput
 
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 # Places with no weather of their own.
 NO_WEATHER = {"space", "moon", "underwater", "cave"}
 
-# Things that belong to a place. When the dream moves somewhere else they stay behind;
-# creatures and objects travel with the dreamer.
+# Things that belong to a place: when the dream moves somewhere else they stay behind
+# unless the storyteller says they come along. Beings and objects come along only when they
+# are kept, changed or named (see Session.apply).
 SCENERY = {"tree", "flower", "mushroom", "rock", "water", "fireflies", "cloud", "house",
            "castle", "fire", "rainbow", "crystal", "portal", "sun", "moon", "planet", "star",
            "other"}
@@ -35,6 +36,17 @@ class Thing:
     where: str = "around"
     motion: str = "still"
     born: int = 0          # turn number it appeared on
+
+
+_QUEST_COMMON = {"find", "quest", "quiet", "the", "a", "an", "of", "for", "to", "and", "help", "reach",
+                 "learn", "make", "lost", "hidden", "secret", "ancient", "magic", "small", "little", "great"}
+
+
+def _same_quest(new: str, old: str) -> bool:
+    """The director often says the same quest in new words ("a hidden stone" becomes "find
+    the ancient moss stone"): they share a word that matters."""
+    words = lambda q: {w for w in re.findall(r"[a-z]{3,}", q.lower()) if w not in _QUEST_COMMON}
+    return bool(old) and bool(words(new) & words(old))
 
 
 def _fact_words(fact: str) -> frozenset[str]:
@@ -57,6 +69,15 @@ class Session:
     things: dict[str, dict] = field(default_factory=dict)
     clarity: float = 0.12
     ended: bool = False
+    # The quiet director's view of the story (written between turns, see apply_direction).
+    quest: str = ""                  # what the dream is about now, in short English
+    quest_shown: str = ""            # the same in the player's language, for the screen
+    progress: int = 0                # 0 .. vocab.QUEST_STEPS
+    fulfilled: str = ""              # a quest just completed, until the storyteller celebrates it
+    quests_done: int = 0
+    wants: dict[str, str] = field(default_factory=dict)
+    hint: str = ""                   # what is quietly happening, for the next answer
+    directed: int = -1               # the turn the director last looked at
     history: list[dict] = field(default_factory=list)
     created: float = field(default_factory=time.time)
     updated: float = field(default_factory=time.time)
@@ -88,10 +109,18 @@ class Session:
         if self.things:
             lines.append("Things in the dream now (id: kind, label):")
             for t in self.things.values():
+                want = self.wants.get(t["id"])
                 lines.append(f"- {t['id']}: {t['kind']}" + (f", {t['label']}" if t["label"] else "")
-                             + (f", x{t['count']}" if t["count"] > 1 else ""))
+                             + (f", x{t['count']}" if t["count"] > 1 else "")
+                             + (f" (wants {want})" if want else ""))
         else:
             lines.append("Things in the dream now: none.")
+        if self.fulfilled:
+            lines.append(f"Your quest is fulfilled: {self.fulfilled}. Celebrate it; a new wish may appear.")
+        elif self.quest:
+            lines.append(f"Your quest: {self.quest} ({self.progress} of {vocab.QUEST_STEPS} done).")
+        if self.hint:
+            lines.append(f"Meanwhile: {self.hint}")
         return "\n".join(lines)
 
     def now_line(self) -> str:
@@ -108,6 +137,33 @@ class Session:
         return f"You are {a} {me} {where}, at {self.setting['time']}."
 
     # ------------------------------------------------------------------ updates
+    def apply_direction(self, d: Direction) -> dict:
+        """What the quiet director decided between turns. A quest only moves forward; when
+        it is complete the next answer celebrates it and a new one may begin."""
+        if d.quest == "" and self.quest and self.progress < vocab.QUEST_STEPS:
+            pass                                       # a quest is never dropped half-way
+        elif d.quest not in ("same", "") and _same_quest(d.quest, self.quest):
+            self.quest = d.quest                       # the same quest, said more precisely
+        elif d.quest not in ("same", "") and d.quest.lower() != self.quest.lower():
+            if self.quest and self.progress >= vocab.QUEST_STEPS - 1:
+                self.quests_done += 1                  # it was all but done: count it
+            self.quest, self.progress = d.quest, 0
+        if d.shown and self.quest:
+            self.quest_shown = d.shown
+        if d.progress is not None and self.quest:
+            self.progress = max(self.progress, min(vocab.QUEST_STEPS, d.progress, self.progress + 2))
+        done = False
+        if self.quest and self.progress >= vocab.QUEST_STEPS:
+            self.fulfilled, done = self.quest, True
+            self.quests_done += 1
+            self.quest, self.quest_shown, self.progress = "", "", 0
+        self.wants.update({k: v for k, v in d.wants.items() if k in self.things})
+        self.hint = d.hint
+        self.directed = self.turn
+        self.updated = time.time()
+        return {"quest": self.quest, "shown": self.quest_shown, "progress": self.progress,
+                "steps": vocab.QUEST_STEPS, "fulfilled": done, "next": d.next, "wants": dict(self.wants)}
+
     def remember(self, role: str, text: str) -> None:
         self.history.append({"role": role, "text": text, "turn": self.turn})
         self.history = self.history[-40:]
@@ -128,9 +184,13 @@ class Session:
             self.history = kept
         return changed
 
-    def apply(self, out: TurnOutput) -> dict:
-        """Apply one LLM turn. Returns what changed, for the renderer."""
+    def apply(self, out: TurnOutput, mentioned: set[str] = frozenset(), moved: bool = False) -> dict:
+        """Apply one LLM turn. Returns what changed, for the renderer. `mentioned` holds the
+        ids of things the player's words or the reply named (they come along to a new place);
+        `moved`: the player went somewhere new that keeps the kind of place (another forest)."""
         self.turn += 1
+        if self.fulfilled:              # the storyteller has had its turn to celebrate it
+            self.fulfilled = ""
         added, changed, removed = [], [], []
         effect = out.effect
 
@@ -159,13 +219,24 @@ class Session:
             self.self_color = out.self_color
 
         new_kind = out.setting_kind
-        if new_kind != "same" and new_kind != self.setting["kind"]:
-            for tid in [k for k, t in self.things.items() if t["kind"] in SCENERY]:
+        travelled = new_kind != "same" and new_kind != self.setting["kind"]
+        if travelled or moved:
+            # A new place: what the storyteller keeps, changes or brings again comes along,
+            # and so do the beings the words name; the rest stays behind in the old place.
+            # Scenery (trees, houses, the sun) belongs to its place unless it is kept.
+            told = set(out.keep) | {a.id for a in out.add}
+            along = told | {c.id for c in out.change} | set(mentioned)
+            for tid in list(self.things):
+                t = self.things[tid]
+                if tid in (told if t["kind"] in SCENERY else along):
+                    continue
                 del self.things[tid]
                 removed.append(tid)
-            self.setting["kind"] = new_kind
+            self.hint = ""
             if effect == "none":
                 effect = "warp"
+        if travelled:
+            self.setting["kind"] = new_kind
             # Rain and snow stay behind on the moon, in space, under water and in caves.
             if out.setting_weather == "same" and new_kind in NO_WEATHER:
                 self.setting["weather"] = "clear"
@@ -212,6 +283,7 @@ class Session:
             if ch.id not in added:
                 changed.append(ch.id)
 
+        self.wants = {k: v for k, v in self.wants.items() if k in self.things}
         # The dream forgets its oldest things.
         if len(self.things) > vocab.MAX_THINGS:
             old = sorted((t for t in self.things.values() if t["id"] not in added),

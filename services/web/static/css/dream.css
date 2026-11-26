@@ -28,6 +28,17 @@ canvas#dream { position: fixed; inset: 0; width: 100vw; height: 100vh; display: 
 @keyframes beat { 50% { opacity: 0.35; } }
 @keyframes ping { 0% { transform: scale(1.8); } 100% { transform: scale(1); } }
 
+/* ---------------------------------------------------------------- the dream's quest */
+#quest { position: fixed; top: 40px; inset-inline-start: 16px; z-index: 5; display: flex; flex-direction: column; gap: 6px;
+  max-width: min(420px, 70vw); font-family: var(--serif); font-size: 15px; color: var(--ink); opacity: 0;
+  text-shadow: 0 0 12px rgba(170, 210, 255, 0.45), 0 0 2px rgba(0, 0, 0, 0.9); transition: opacity 2s ease; pointer-events: none; }
+#quest.show { opacity: 0.82; }
+#quest-text::before { content: "✦ "; color: var(--warm); }
+#quest-steps { display: flex; gap: 6px; }
+#quest-steps i { width: 14px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.18); transition: background 1.2s, box-shadow 1.2s; }
+#quest-steps i.done { background: var(--warm); box-shadow: 0 0 8px #ffd98a99; }
+#quest.fulfilled #quest-steps i { background: #7fffd4; box-shadow: 0 0 10px #7fffd4aa; }
+
 /* ---------------------------------------------------------------- subtitles */
 #subtitles { position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%); width: min(880px, 88vw); text-align: center; z-index: 4; pointer-events: none; }
 #dreamer-line { font-family: var(--serif); font-size: clamp(20px, 2.3vw, 30px); line-height: 1.45; margin: 0;
