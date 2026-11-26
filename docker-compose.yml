@@ -1,106 +1,126 @@
-# docker-compose.yml
-version: '3.8'
+# DreamScape: an ecosystem of local containers.
+#   web       - serves the dream page, runs each turn, watches every heartbeat (port 80)
+#   director  - the game master: story memory + structured scene updates (talks to ollama)
+#   ollama    - runs the local language model on the GPU
+#   voice     - speech-to-text (Whisper, Hebrew-tuned) and text-to-speech (BlueTTS)
+#   imagery   - paints the dream's things and places (on this processor, or on a second
+#               machine's GPU that joins through Dask)
+name: dreamscape
+
+x-gpu: &gpu
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: all
+            capabilities: [gpu]
+
+x-health: &health
+  interval: 10s
+  timeout: 5s
+  retries: 5
+  start_period: 20s
 
 services:
-  frontend:
-    build: ./content
+  web:
+    build: ./services/web
     ports:
-      - "80:80"
-    volumes:
-      - ./generated_media:/app/static/media:rw
-    networks:
-      - mynetwork
-    depends_on:
-      - init
-
-  backend:
-    build: ./backend
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./generated_media:/app/static/media:rw
-    networks:
-      - mynetwork
+      - "${WEB_PORT:-80}:8080"
     environment:
-      - MEDIA_GEN_URL=http://mediagen:9001
-      - LLM_URL=http://container_llm:9000
-    depends_on:
-      - init
-
-  mediagen:
-    build:
-      context: ./mediagen
-      dockerfile: Dockerfile
-    container_name: mediagen
-    volumes:
-      # Don't mount the entire app directory
-      - ./model_cache:/app/model_cache:rw
-      - ./generated_media:/app/generated_media:rw
-      - ./static/media:/app/static/media:rw
-    ports:
-      - "9001:9001"  # Application API
-      - "8786:8786"  # Dask scheduler - important to expose this to allow remote workers to connect
-      - "8787:8787"  # Dask dashboard
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=all
-      - MODEL_CACHE_DIR=/app/model_cache
-      - OUTPUT_DIR=/app/generated_media
-      - DASK_SCHEDULER_PORT=8786
-      - DASK_DASHBOARD_PORT=8787
-      - REMOTE_WORKER_IP=10.100.102.27
-    networks:
-      - mynetwork
+      DIRECTOR_URL: http://director:9010
+      VOICE_URL: http://voice:9020
+      IMAGERY_URL: ${IMAGERY_URL-http://imagery:9030}
+      HEARTBEAT_S: "3"
+    depends_on: [director, voice]
     restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    depends_on:
-      - init
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
 
-  container_llm:
-    build: ./container_LLM
-    ports:
-      - "5002:9000"
-    runtime: nvidia
-    volumes:
-      - ./model_cache:/model_cache:rw
-    deploy:
-      resources:
-        limits:
-          memory: 16G  
-          cpus: '4'    
-        reservations:
-          memory: 8G
+  director:
+    build: ./services/director
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - TRANSFORMERS_CACHE=/model_cache
-      - HF_HOME=/model_cache
-    networks:
-      - mynetwork
-    depends_on:
-      - init
-
-  init:
-    image: alpine
-    command: >
-      sh -c "mkdir -p /data/generated_media /data/model_cache /data/static/media && 
-             chmod -R 777 /data/generated_media /data/model_cache /data/static/media && 
-             echo 'Directories initialized with proper permissions'"
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      LLM_MODEL: ${LLM_MODEL:-gemma4:e4b}
+      LLM_NUM_CTX: ${LLM_NUM_CTX:-4096}
+      LLM_TEMPERATURE: ${LLM_TEMPERATURE:-0.8}
+      LLM_NUM_THREAD: ${LLM_NUM_THREAD:-0}
+      DATA_DIR: /data/sessions
     volumes:
-      - ./:/data
-    restart: "no"
-    networks:
-      - mynetwork
+      - dreams:/data/sessions
+    depends_on: [ollama]
+    restart: unless-stopped
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9010/healthz', timeout=3)"]
 
-networks:
-  mynetwork:
-    driver: bridge
+  ollama:
+    image: ollama/ollama:latest
+    environment:
+      OLLAMA_KEEP_ALIVE: 2h
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_KV_CACHE_TYPE: ${OLLAMA_KV_CACHE_TYPE:-f16}
+      # GPU kernels compiled on first use are kept in the volume, so later starts skip the
+      # ~45 s compile on the first turn.
+      CUDA_CACHE_PATH: /root/.ollama/cuda-cache
+      CUDA_CACHE_MAXSIZE: "4294967296"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      <<: *health
+      test: ["CMD", "ollama", "list"]
+    <<: *gpu
+
+  voice:
+    build: ./services/voice
+    environment:
+      STT_MODEL: ${STT_MODEL:-ivrit-ai/whisper-large-v3-turbo-ct2}
+      STT_MODEL_EN: ${STT_MODEL_EN:-}
+      STT_DEVICE: ${STT_DEVICE:-cuda}
+      STT_COMPUTE_TYPE: ${STT_COMPUTE_TYPE:-int8_float16}
+      VOICE_NEUTRAL: ${VOICE_NEUTRAL:-noa,ariel}
+      VOICE_FEMALE: ${VOICE_FEMALE:-maya}
+      VOICE_MALE: ${VOICE_MALE:-daniel}
+      TTS_SPEED: ${TTS_SPEED:-0.95}
+      TTS_DEVICE: ${TTS_DEVICE:-cuda}
+      TTS_GPU_MB: ${TTS_GPU_MB:-900}
+    volumes:
+      - models:/models
+    restart: unless-stopped
+    healthcheck:
+      <<: *health
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9020/healthz', timeout=3)"]
+    <<: *gpu
+
+  # Paints on this laptop's processor (about 6 GB of memory and a 3 GB download on the first
+  # start; the graphics card stays with the storyteller and the voices). A GPU machine running
+  # worker/docker-compose.yml takes the painting over when it joins (set DASK_BIND=0.0.0.0).
+  imagery:
+    build:
+      context: ./services/imagery
+      args:
+        TORCH: ${IMAGERY_TORCH:-cpu}       # cu126 to paint on this machine's graphics card
+    ports:
+      - "${DASK_BIND:-127.0.0.1}:8786:8786"   # Dask scheduler: where a GPU worker joins
+      - "${DASK_BIND:-127.0.0.1}:8787:8787"   # Dask dashboard
+    environment:
+      IMAGERY_LOCAL: ${IMAGERY_LOCAL:-1}
+      IMAGERY_DEVICE: ${IMAGERY_DEVICE:-cpu}
+      IMAGERY_THREADS: ${IMAGERY_THREADS:-0}
+      IMAGERY_MODEL: ${IMAGERY_MODEL:-stabilityai/sd-turbo}
+    volumes:
+      - models:/models
+    mem_limit: ${IMAGERY_MEM:-9g}
+    restart: unless-stopped
+    healthcheck:
+      <<: *health
+      start_period: 600s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9030/healthz', timeout=3)"]
+    <<: *gpu
 
 volumes:
-  model_cache:
-  generated_media:
+  dreams:
+  ollama:
+  models:

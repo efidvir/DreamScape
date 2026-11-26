@@ -1,0 +1,49 @@
+# Live code: Docker Compose reads this file together with docker-compose.yml.
+# The services run their code straight from this folder and restart themselves when a
+# file changes (polling, because Windows folders send no change events into containers).
+# Page files (HTML, CSS, JavaScript) apply on the next page reload.
+# Ollama also answers on http://127.0.0.1:11435 (this computer only) for tuning prompts.
+# Delete this file to run only the code baked into the images.
+
+x-live: &live
+  PYTHONDONTWRITEBYTECODE: "1"
+  WATCHFILES_FORCE_POLLING: "true"
+
+services:
+  web:
+    volumes:
+      - { type: bind, source: ./services/web/app, target: /srv/app }
+      - { type: bind, source: ./services/web/static, target: /srv/static }
+    environment:
+      <<: *live
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080",
+              "--ws-max-size", "33554432", "--reload", "--reload-dir", "/srv/app"]
+
+  director:
+    volumes:
+      - { type: bind, source: ./services/director/app, target: /srv/app }
+    environment:
+      <<: *live
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9010",
+              "--reload", "--reload-dir", "/srv/app"]
+
+  voice:
+    volumes:
+      - { type: bind, source: ./services/voice/app, target: /srv/app }
+    environment:
+      <<: *live
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9020",
+              "--reload", "--reload-dir", "/srv/app"]
+
+  imagery:
+    volumes:
+      - { type: bind, source: ./services/imagery/app, target: /srv/app }
+    environment:
+      <<: *live
+      RELOAD: "1"
+
+  ollama:
+    ports:
+      - "127.0.0.1:11435:11434"
+    environment:
+      OLLAMA_ORIGINS: "http://localhost,http://localhost:*,http://127.0.0.1,http://127.0.0.1:*"

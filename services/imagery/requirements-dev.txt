@@ -1,0 +1,8 @@
+# What the tests need: the API and the stroke maths, without the image models.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+pillow
+numpy
+httpx
+pytest==9.2.0

@@ -1,0 +1,47 @@
+# Run this on the second GPU machine. It joins the laptop's imagery service as a Dask
+# GPU worker and paints the dream's things and places there.
+#   1. copy this repo (or just services/imagery and this folder) to that machine
+#   2. create worker/.env with SCHEDULER_HOST=<laptop IP> and WORKER_HOST=<this machine's IP>
+#   3. docker compose up -d --build
+name: dreamscape-worker
+
+services:
+  gpu-worker:
+    build:
+      context: ../services/imagery
+      args:
+        TORCH: cu126
+    command:
+      - dask
+      - worker
+      - tcp://${SCHEDULER_HOST:?set SCHEDULER_HOST to the laptop's IP}:8786
+      - --name
+      - ${WORKER_NAME:-gpu-worker}
+      - --resources
+      - GPU=1
+      - --nthreads
+      - "1"
+      - --no-nanny
+      - --listen-address
+      - tcp://0.0.0.0:8788
+      - --contact-address
+      - tcp://${WORKER_HOST:?set WORKER_HOST to this machine's IP}:8788
+    ports:
+      - "8788:8788"
+    environment:
+      IMAGERY_MODEL: ${IMAGERY_MODEL:-stabilityai/sd-turbo}
+      IMAGERY_DEVICE: ${IMAGERY_DEVICE:-cuda}
+      HF_HOME: /models/hf
+    volumes:
+      - models:/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  models:
